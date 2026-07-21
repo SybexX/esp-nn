@@ -23,7 +23,22 @@ void esp_nn_relu6_s8_riscv_pie(int8_t *data, uint16_t size)
 
     int i = 0;
 
-    if (size >= 16) {
+    /* esp.vld.128/esp.vst.128 need a 16-byte aligned address (verified on
+     * ESP32-S31: unaligned pointers get processed lane-shifted, see
+     * github.com/espressif/esp-nn issue #21 for the ESP32-S3 counterpart).
+     * Consume bytes scalar until `data` is aligned. */
+    int head = (16 - ((uintptr_t)data & 15)) & 15;
+    if (head > size) {
+        head = size;
+    }
+    for (; i < head; i++) {
+        int32_t val = data[i];
+        if (val < 0) val = 0;
+        if (val > 6) val = 6;
+        data[i] = (int8_t) val;
+    }
+
+    if (size - i >= 16) {
         /* Broadcast 0 into q2 and 6 into q3 */
         const int8_t zero_val = 0;
         const int8_t six_val = 6;
@@ -38,7 +53,7 @@ void esp_nn_relu6_s8_riscv_pie(int8_t *data, uint16_t size)
             : "x30", "x31"
         );
 
-        int count = size >> 4;
+        int count = (size - i) >> 4;
         int stride = 16;
 
         asm volatile (
@@ -56,11 +71,11 @@ void esp_nn_relu6_s8_riscv_pie(int8_t *data, uint16_t size)
             "bnez   x31, 1b                 \n\t"
 
             :
-            : [ptr] "r"(data), [cnt] "r"(count), [stride] "r"(stride)
+            : [ptr] "r"(data + i), [cnt] "r"(count), [stride] "r"(stride)
             : "x29", "x30", "x31", "memory"
         );
 
-        i = count << 4;
+        i += count << 4;
     }
 
     /* Handle remaining elements scalar */
