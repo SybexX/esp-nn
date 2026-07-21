@@ -11,7 +11,7 @@
  * Clamps each element to [0, 6].
  * Processes 16 elements per iteration via 128-bit vector ops.
  */
-void esp_nn_relu6_s8_esp32p4(int8_t *data, uint16_t size)
+void esp_nn_relu6_s8_riscv_pie(int8_t *data, uint16_t size)
 {
     /* Enable PIE */
     asm volatile (

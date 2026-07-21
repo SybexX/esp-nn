@@ -8,7 +8,7 @@
  * Optimizations strategies used:
  * Below optimizations are capable of any size of input/filter:
  *
- * 1. For filter wdxht = 1x1 (Refer esp_nn_conv_s8_mult8_1x1_esp32p4 function)
+ * 1. For filter wdxht = 1x1 (Refer esp_nn_conv_s8_mult8_1x1_riscv_pie function)
  *      - For this specific version, the strategy we employ:
  *          > This particular filter has only the channel
  *              dimension and we have `out_ch` number of such filters.
@@ -16,7 +16,7 @@
  *          > Keep loading and multiplying filter values one by one,
  *              to produce 8 outputs in parallel
  *
- * 2. General version: (Refer esp_nn_conv_s8_filter_aligned_input_padded_esp32p4)
+ * 2. General version: (Refer esp_nn_conv_s8_filter_aligned_input_padded_riscv_pie)
  *      - For all other cases:
  *          > Consider `filter_wd * in_ch` as a single row. These many values can
  *              be continuosly loaded from inputs as well.
@@ -881,7 +881,7 @@ static void esp_nn_conv_s8_tiled(
     }
 }
 
-int esp_nn_get_conv_scratch_size_esp32p4(const data_dims_t *input_dims,
+int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
                                          const data_dims_t *filter_dims,
                                          const data_dims_t *output_dims,
                                          const conv_params_t *conv_params)
@@ -982,7 +982,7 @@ int esp_nn_get_conv_scratch_size_esp32p4(const data_dims_t *input_dims,
     return align_buf_size;
 }
 
-void esp_nn_set_conv_scratch_buf_esp32p4(void *buf)
+void esp_nn_set_conv_scratch_buf_riscv_pie(void *buf)
 {
     // We are going to use the vector extensions
     asm volatile (
@@ -997,7 +997,7 @@ void esp_nn_set_conv_scratch_buf_esp32p4(void *buf)
     scratch_buffer = (int16_t *) buf;
 }
 
-void esp_nn_conv_s8_esp32p4(const data_dims_t *input_dims,
+void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
                             const int8_t *input,
                             const data_dims_t *filter_dims,
                             const int8_t *filter_data,

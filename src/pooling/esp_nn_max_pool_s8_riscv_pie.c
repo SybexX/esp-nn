@@ -5,17 +5,15 @@
  */
 
 #include <stdint.h>
+#include <limits.h>
 #include <common_functions.h>
 
 /**
- * Average pooling for s8 using ESP32-P4 PIE SIMD.
- *
- * Uses QACC per-lane accumulation: multiply 16 input channels by a
- * vector of 1s, accumulate per-lane across filter window.
- * Extract 16 × int32 sums via esp.st.qacc.{l,h}.{l,h}.128.ip.
- * Then divide, clamp, and store.
+ * Max pooling for s8 using ESP32-P4 PIE SIMD.
+ * Vectorizes the channel dimension: processes 16 channels per iteration
+ * using esp.vmax.s8 to find running maximum across the filter window.
  */
-void esp_nn_avg_pool_s8_esp32p4(const int8_t *input,
+void esp_nn_max_pool_s8_riscv_pie(const int8_t *input,
                                  const uint16_t input_wd,
                                  const uint16_t input_ht,
                                  int8_t *output,
@@ -39,15 +37,23 @@ void esp_nn_avg_pool_s8_esp32p4(const int8_t *input,
         ::: "x29"
     );
 
-    /* Broadcast 1 into q7 for "multiply by 1" accumulation trick */
-    const int8_t one_val = 1;
+    /* Broadcast activation_min and activation_max into vectors */
+    int8_t act_min_val = (int8_t) activation_min;
+    int8_t act_max_val = (int8_t) activation_max;
+    int8_t int8_min_val = INT8_MIN;
+
     asm volatile (
-        "mv     x30, %0             \n\t"
-        "esp.vldbc.8.ip q7, x30, 0  \n\t"
-        :: "r"(&one_val) : "x30"
+        "mv              x30, %0     \n\t"
+        "esp.vldbc.8.ip  q4, x30, 0 \n\t"  /* q4 = broadcast(activation_min) */
+        "mv              x30, %1     \n\t"
+        "esp.vldbc.8.ip  q5, x30, 0 \n\t"  /* q5 = broadcast(activation_max) */
+        "mv              x30, %2     \n\t"
+        "esp.vldbc.8.ip  q6, x30, 0 \n\t"  /* q6 = broadcast(INT8_MIN) for init */
+        :: "r"(&act_min_val), "r"(&act_max_val), "r"(&int8_min_val)
+        : "x30"
     );
 
-    const int32_t ch_16 = channels >> 4;
+    const int32_t ch_16 = channels >> 4;  /* number of full 16-ch blocks */
 
     int32_t base_y = -pad_ht;
     for (int32_t out_y = 0; out_y < output_ht; out_y++, base_y += stride_ht) {
@@ -57,19 +63,17 @@ void esp_nn_avg_pool_s8_esp32p4(const int8_t *input,
             int32_t filter_x_start = max(0, -base_x);
             int32_t filter_y_end = min(filter_ht, input_ht - base_y);
             int32_t filter_x_end = min(filter_wd, input_wd - base_x);
-            int32_t filter_cnt = (filter_y_end - filter_y_start) * (filter_x_end - filter_x_start);
-            int32_t half_cnt = filter_cnt >> 1;
 
             int8_t *out_ptr = output + (out_y * output_wd + out_x) * channels;
 
-            /* Process 16 channels at a time using QACC per-lane accumulation */
+            /* Process channels in blocks of 16 */
             int32_t ch_offset = 0;
             for (int32_t ch_blk = 0; ch_blk < ch_16; ch_blk++, ch_offset += 16) {
+                /* Initialize running max to INT8_MIN (copy q6 -> q0) */
+                asm volatile ("esp.vmax.s8 q0, q6, q6 \n\t");
 
-                /* Clear per-lane accumulators */
-                asm volatile ("esp.zero.qacc \n\t");
-
-                /* Accumulate via QACC with stride-based fx loop */
+                /* Accumulate max across filter window.
+                 * For fx loop: input channels are at stride=channels apart. */
                 for (int32_t fy = filter_y_start; fy < filter_y_end; fy++) {
                     int32_t in_y = base_y + fy;
                     const int8_t *row_ptr = input + (in_y * input_wd + base_x + filter_x_start) * channels + ch_offset;
@@ -79,8 +83,8 @@ void esp_nn_avg_pool_s8_esp32p4(const int8_t *input,
                         "mv     x30, %[ptr]              \n\t"
                         "mv     s7,  %[cnt]              \n\t"
                         "1:                              \n\t"
-                        "esp.vld.128.ip  q0, x30, 0      \n\t"
-                        "esp.vmulas.s8.qacc q0, q7       \n\t"
+                        "esp.vld.128.ip  q1, x30, 0      \n\t"
+                        "esp.vmax.s8     q0, q0, q1      \n\t"
                         "add    x30, x30, %[stride]      \n\t"
                         "addi   s7, s7, -1               \n\t"
                         "bnez   s7, 1b                   \n\t"
@@ -91,47 +95,35 @@ void esp_nn_avg_pool_s8_esp32p4(const int8_t *input,
                     );
                 }
 
-                /* Extract 16 per-lane int32 sums from QACC:
-                 * qacc has 4 quadrants, each 128 bits = 4 × int32 */
-                int32_t sums[16] __attribute__((aligned(16)));
-                asm volatile (
-                    "mv                      x30, %0     \n\t"
-                    "esp.st.qacc.l.l.128.ip  x30, 16     \n\t"  /* lanes 0-3 */
-                    "esp.st.qacc.l.h.128.ip  x30, 16     \n\t"  /* lanes 4-7 */
-                    "esp.st.qacc.h.l.128.ip  x30, 16     \n\t"  /* lanes 8-11 */
-                    "esp.st.qacc.h.h.128.ip  x30, 0      \n\t"  /* lanes 12-15 */
-                    :: "r"(sums)
-                    : "x30", "memory"
-                );
-
-                /* Rounded division and activation clamp */
-                for (int k = 0; k < 16; k++) {
-                    int32_t s = sums[k];
-                    int32_t result = s > 0 ? (s + half_cnt) / filter_cnt
-                                           : (s - half_cnt) / filter_cnt;
-                    result = max(result, activation_min);
-                    result = min(result, activation_max);
-                    out_ptr[ch_offset + k] = (int8_t) result;
+                /* Apply activation: max(act_min, min(act_max, result)) and store */
+                {
+                    int8_t *store_ptr = out_ptr + ch_offset;
+                    asm volatile (
+                        "esp.vmax.s8     q0, q0, q4       \n\t"  /* max(result, act_min) */
+                        "esp.vmin.s8     q0, q0, q5       \n\t"  /* min(result, act_max) */
+                        "mv              x30, %0          \n\t"
+                        "esp.vst.128.ip  q0, x30, 0       \n\t"  /* store 16 channels */
+                        :
+                        : "r"(store_ptr)
+                        : "x30", "memory"
+                    );
                 }
             }
 
             /* Handle remaining channels scalar */
             for (int32_t ch_idx = ch_offset; ch_idx < channels; ch_idx++) {
-                int32_t result = 0;
-                int32_t count = 0;
+                int8_t result = INT8_MIN;
                 for (int32_t fy = filter_y_start; fy < filter_y_end; fy++) {
                     for (int32_t fx = filter_x_start; fx < filter_x_end; fx++) {
                         int32_t in_y = base_y + fy;
                         int32_t in_x = base_x + fx;
-                        result += input[(in_y * input_wd + in_x) * channels + ch_idx];
-                        count++;
+                        int32_t input_index = (in_y * input_wd + in_x) * channels + ch_idx;
+                        result = max(input[input_index], result);
                     }
                 }
-                result = result > 0 ? (result + count / 2) / count
-                                    : (result - count / 2) / count;
-                result = max(result, activation_min);
-                result = min(result, activation_max);
-                out_ptr[ch_idx] = (int8_t) result;
+                result = max(result, (int8_t) activation_min);
+                result = min(result, (int8_t) activation_max);
+                out_ptr[ch_idx] = result;
             }
         }
     }

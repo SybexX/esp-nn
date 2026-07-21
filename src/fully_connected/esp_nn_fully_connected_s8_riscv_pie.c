@@ -112,7 +112,7 @@ int32_t fc_dot_s8_pie(const int8_t *input, const int8_t *filter, int32_t row_len
     return result;
 }
 
-void esp_nn_fully_connected_s8_esp32p4(const int8_t *input_data,
+void esp_nn_fully_connected_s8_riscv_pie(const int8_t *input_data,
                                         const int32_t input_offset,
                                         const uint16_t row_len,
                                         const int8_t *filter_data,
@@ -176,7 +176,7 @@ void esp_nn_fully_connected_s8_esp32p4(const int8_t *input_data,
     }
 }
 
-void esp_nn_fully_connected_per_ch_s8_esp32p4(const int8_t *input_data,
+void esp_nn_fully_connected_per_ch_s8_riscv_pie(const int8_t *input_data,
                                         const int32_t input_offset,
                                         const uint16_t row_len,
                                         const int8_t *filter_data,

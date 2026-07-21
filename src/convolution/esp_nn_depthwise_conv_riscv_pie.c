@@ -8,7 +8,7 @@
 #include <common_functions.h>
 #include <stdlib.h>
 
-/* Note: esp_nn_requant_2x_esp32p4.S exists but inline ESP_NN_REQUANT_2X macro
+/* Note: esp_nn_requant_2x_riscv_pie.S exists but inline ESP_NN_REQUANT_2X macro
  * from common_functions.h is used instead (avoids function call overhead). */
 
 /* External fallback */
@@ -22,7 +22,7 @@ void esp_nn_depthwise_conv_s8_opt(const data_dims_t *input_dims,
                                    const dw_conv_params_t *conv_params,
                                    const quant_data_t *quant_data);
 
-int esp_nn_get_depthwise_conv_scratch_size_esp32p4(const data_dims_t *input_dims,
+int esp_nn_get_depthwise_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
                                                     const data_dims_t *filter_dims,
                                                     const data_dims_t *output_dims,
                                                     const dw_conv_params_t *conv_params)
@@ -30,7 +30,7 @@ int esp_nn_get_depthwise_conv_scratch_size_esp32p4(const data_dims_t *input_dims
     return 0;
 }
 
-void esp_nn_set_depthwise_conv_scratch_buf_esp32p4(const void *buf)
+void esp_nn_set_depthwise_conv_scratch_buf_riscv_pie(const void *buf)
 {
     (void) buf;
 }
@@ -259,7 +259,7 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
     }
 }
 
-void esp_nn_depthwise_conv_s8_esp32p4(const data_dims_t *input_dims,
+void esp_nn_depthwise_conv_s8_riscv_pie(const data_dims_t *input_dims,
                                        const int8_t *input_data,
                                        const data_dims_t *filter_dims,
                                        const int8_t *filter_data,

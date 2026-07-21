@@ -29,7 +29,7 @@ int32_t add_requant(int32_t val, int32_t mult, int32_t neg_shift)
     return result;
 }
 
-void esp_nn_add_elementwise_s8_esp32p4(const int8_t *input1_data,
+void esp_nn_add_elementwise_s8_riscv_pie(const int8_t *input1_data,
                                         const int8_t *input2_data,
                                         const int32_t input1_offset,
                                         const int32_t input2_offset,

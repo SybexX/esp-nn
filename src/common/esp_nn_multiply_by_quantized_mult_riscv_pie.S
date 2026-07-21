@@ -9,7 +9,7 @@
  * Interleaves mul/mulh across 2 elements for better pipeline utilization.
  * Uses a0-a7 and t0-t6 only (no callee-saved registers needed).
  *
- * void esp_nn_requant_2x_esp32p4(
+ * void esp_nn_requant_2x_riscv_pie(
  *     int32_t x0,       // a0
  *     int32_t x1,       // a1
  *     int32_t mult0,    // a2
@@ -22,10 +22,10 @@
 
     .text
     .align  4
-    .global esp_nn_requant_2x_esp32p4
-    .type   esp_nn_requant_2x_esp32p4, @function
+    .global esp_nn_requant_2x_riscv_pie
+    .type   esp_nn_requant_2x_riscv_pie, @function
 
-esp_nn_requant_2x_esp32p4:
+esp_nn_requant_2x_riscv_pie:
     /* Compute left_shift and apply */
     mv      t0, a0              /* x0 */
     mv      t1, a1              /* x1 */
@@ -97,4 +97,4 @@ esp_nn_requant_2x_esp32p4:
     sw      t1, 4(a6)
     ret
 
-    .size   esp_nn_requant_2x_esp32p4, . - esp_nn_requant_2x_esp32p4
+    .size   esp_nn_requant_2x_riscv_pie, . - esp_nn_requant_2x_riscv_pie

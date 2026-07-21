@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <common_functions.h>
 
-void esp_nn_mean_nhwc_s8_esp32p4(const int8_t *input,
+void esp_nn_mean_nhwc_s8_riscv_pie(const int8_t *input,
                                   int8_t *output,
                                   const int32_t height,
                                   const int32_t width,

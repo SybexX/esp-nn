@@ -52,7 +52,7 @@ int8_t hard_swish_output(int16_t reluish, int16_t in_on_out_scale,
     return (int8_t)result;
 }
 
-void esp_nn_hard_swish_s8_esp32p4(const int8_t *input,
+void esp_nn_hard_swish_s8_riscv_pie(const int8_t *input,
                                    int8_t *output,
                                    const int32_t size,
                                    const int16_t input_zero_point,
