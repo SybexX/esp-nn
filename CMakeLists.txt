@@ -54,7 +54,8 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         "src/softmax/esp_nn_softmax_s8_esp32s3.c")
 endif()
 
-if(CONFIG_IDF_TARGET_ESP32P4)
+# ESP32-S31 shares the P4 PIE/SIMD ISA, so it reuses the ESP32-P4 kernels
+if(CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)
     set(p4_srcs
         "src/common/esp_nn_mean_s8_esp32p4.c"
         "src/common/esp_nn_multiply_by_quantized_mult_esp32p4.S"

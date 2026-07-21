@@ -28,10 +28,14 @@ void esp_nn_relu6_s8_esp32p4(int8_t *data, uint16_t size)
         const int8_t zero_val = 0;
         const int8_t six_val = 6;
 
+        /* esp.* GPR operands must be x26-x31 (required on S31) */
         asm volatile (
-            "esp.vldbc.8.ip  q2, %0, 0   \n\t"
-            "esp.vldbc.8.ip  q3, %1, 0   \n\t"
+            "mv     x30, %0              \n\t"
+            "mv     x31, %1              \n\t"
+            "esp.vldbc.8.ip  q2, x30, 0  \n\t"
+            "esp.vldbc.8.ip  q3, x31, 0  \n\t"
             :: "r"(&zero_val), "r"(&six_val)
+            : "x30", "x31"
         );
 
         int count = size >> 4;
@@ -40,18 +44,20 @@ void esp_nn_relu6_s8_esp32p4(int8_t *data, uint16_t size)
         asm volatile (
             "mv     x30, %[ptr]             \n\t"
             "mv     x31, %[cnt]             \n\t"
+            /* esp.vst.128.xp stride register must be x26-x31 (required on S31) */
+            "mv     x29, %[stride]          \n\t"
 
             "1:                             \n\t"
             "esp.vld.128.ip   q0, x30, 0    \n\t"  /* load 16 bytes, no auto-increment */
             "esp.vmax.s8      q0, q0, q2    \n\t"  /* max(val, 0) */
             "esp.vmin.s8      q0, q0, q3    \n\t"  /* min(val, 6) */
-            "esp.vst.128.xp   q0, x30, %[stride] \n\t"  /* store and advance ptr by 16 */
+            "esp.vst.128.xp   q0, x30, x29  \n\t"  /* store and advance ptr by 16 */
             "addi   x31, x31, -1            \n\t"
             "bnez   x31, 1b                 \n\t"
 
             :
             : [ptr] "r"(data), [cnt] "r"(count), [stride] "r"(stride)
-            : "x30", "x31", "memory"
+            : "x29", "x30", "x31", "memory"
         );
 
         i = count << 4;

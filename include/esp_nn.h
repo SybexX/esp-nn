@@ -1,4 +1,4 @@
-// Copyright 2020-2021 Espressif Systems (Shanghai) PTE LTD
+// Copyright 2020-2026 Espressif Systems (Shanghai) PTE LTD
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,8 @@
 
 #if defined(CONFIG_NN_OPTIMIZED)
 // select apt optimisations
-#ifdef CONFIG_IDF_TARGET_ESP32P4
+// ESP32-S31 shares the P4 PIE/SIMD ISA, so it reuses the ESP32-P4 kernels
+#if defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31)
 #define ARCH_ESP32_P4 1
 #endif
 #ifdef CONFIG_IDF_TARGET_ESP32S3

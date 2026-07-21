@@ -74,10 +74,12 @@ void esp_nn_softmax_s8_esp32p4(const int8_t *input_data,
                 "addi   %[cnt], %[cnt], -1       \n\t"
                 "bnez   %[cnt], 1b               \n\t"
                 "2:                              \n\t"
-                "esp.max.s8.a   q0, %[max]       \n\t"  /* horizontal reduce */
+                /* esp.max.s8.a GPR operand must be x26-x31 (required on S31) */
+                "esp.max.s8.a   q0, x29          \n\t"  /* horizontal reduce */
+                "mv     %[max], x29              \n\t"
                 : [cnt] "+r"(vec_count), [max] "=r"(max_scalar)
                 : [ptr] "r"(in_ptr)
-                : "x30"
+                : "x29", "x30"
             );
             max_in_row = (int8_t) max_scalar;
 

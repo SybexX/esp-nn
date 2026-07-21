@@ -359,11 +359,13 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
                     "mv %1, x30                     \n\t"
                     "mv %2, x31                     \n\t"
                     "esp.vmulas.s8.xacc  q0, q1     \n\t"
-                    "esp.movx.r.xacc.l  %3          \n\t"
+                    /* esp.movx GPR operand must be x26-x31 (required on S31) */
+                    "esp.movx.r.xacc.l  x29         \n\t"
+                    "mv %3, x29                     \n\t"
 
                     : "+r" (in_ch_idx), "+r" (input_ptr), "+r" (filter_ptr), "=r" (conv_out)
                     :  "r"(in_channels)
-                    : "x30", "x31", "s7"
+                    : "x29", "x30", "x31", "s7"
                 );
 skip_asm:
 #endif
