@@ -136,7 +136,27 @@ void esp_nn_fully_connected_s8_riscv_pie(const int8_t *input_data,
 
     /* SIMD path with optional corrections. Math:
      *   sum((x+io)*(w+fo)) = sum(x*w) + io*sum(w) + fo*sum(x) + row_len*io*fo
-     * fc_dot_s8_pie computes sum(x*w); the rest is folded into per-ch corrections. */
+     * fc_dot_s8_pie computes sum(x*w); the rest is folded into per-ch corrections.
+     * Below one SIMD width that two-pass setup is pure overhead, so tiny rows
+     * take a single-pass scalar loop instead (measured at parity with ANSI). */
+    if (row_len < 16) {
+        for (int32_t out_c = 0; out_c < out_channels; ++out_c) {
+            const int8_t *filter_row = filter_data + (int32_t)row_len * out_c;
+            int32_t result = 0;
+            for (int32_t i = 0; i < row_len; i++) {
+                result += (filter_row[i] + filter_offset) * (input_data[i] + input_offset);
+            }
+            if (bias) {
+                result += bias[out_c];
+            }
+            result = esp_nn_requantize(result, out_mult, out_shift);
+            result += out_offset;
+            result = max(result, activation_min);
+            result = min(result, activation_max);
+            out_data[out_c] = (int8_t) result;
+        }
+        return;
+    }
 
     int32_t input_sum = 0;
     if (filter_offset != 0) {
@@ -197,6 +217,26 @@ void esp_nn_fully_connected_per_ch_s8_riscv_pie(const int8_t *input_data,
         "esp.movx.w.cfg x29        \n\t"
         ::: "x29"
     );
+
+    /* Tiny rows: single-pass scalar (see comment in the per-tensor variant) */
+    if (row_len < 16) {
+        for (int32_t out_c = 0; out_c < out_channels; ++out_c) {
+            const int8_t *filter_row = filter_data + (int32_t)row_len * out_c;
+            int32_t result = 0;
+            for (int32_t i = 0; i < row_len; i++) {
+                result += (filter_row[i] + filter_offset) * (input_data[i] + input_offset);
+            }
+            if (bias) {
+                result += bias[out_c];
+            }
+            result = esp_nn_requantize(result, out_mult[out_c], out_shift[out_c]);
+            result += out_offset;
+            result = max(result, activation_min);
+            result = min(result, activation_max);
+            out_data[out_c] = (int8_t) result;
+        }
+        return;
+    }
 
     int32_t input_sum = 0;
     if (filter_offset != 0) {
