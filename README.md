@@ -45,20 +45,20 @@ The library contains optimised NN (Neural Network) functions for various Espress
 
     | Function        | ANSI C  | Optimized | Opt Ratio | Data info   | Memory    |
     | ----------------| --------|-----------|-----------|-------------|-----------|
-    | elementwise_add | 196319  | 75032     | 2.62      | size = 1615 | Internal  |
-    | elementwise_mul | 85179   | 45768     | 1.86      | size = 1615 | Internal  |
-    | convolution     | 4106536 | 667968    | 6.15      | input(10,10), filter(64x1x1x64), pad(0,0), stride(1,1) | Internal |
-    | convolution     | 273615  | 92203     | 2.97      | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | Internal |
-    | convolution     | 1794413 | 780787    | 2.30      | input(8,8), filter(64x3x3x3), pad(0,0), stride(1,1) | Internal |
-    | depthwise conv  | 314307  | 120292    | 2.61      | out(10,10), pad(1,1), stride(1,1), filter: 1x3x3x16 | Internal |
-    | depthwise conv  | 1325244 | 750744    | 1.77      | out(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | Internal |
-    | max pool        | 274865  | 21934     | 12.53     | input(16,16), filter(1x3x3x16) | Internal |
-    | avg pool        | 296531  | 75418     | 3.93      | input(16,16), filter(1x3x3x16) | Internal |
-    | fully connected | 7572    | 943       | 8.03      | len: 271, ch = 3 | Internal |
+    | elementwise_add | 196283  | 75032     | 2.62      | size = 1615 | Internal  |
+    | elementwise_mul | 83337   | 45765     | 1.82      | size = 1615 | Internal  |
+    | convolution     | 4107787 | 658148    | 6.24      | input(10,10), filter(64x1x1x64), pad(0,0), stride(1,1) | Internal |
+    | convolution     | 277008  | 94210     | 2.94      | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | Internal |
+    | convolution     | 1798390 | 765708    | 2.35      | input(8,8), filter(64x3x3x3), pad(0,0), stride(1,1) | Internal |
+    | depthwise conv  | 315201  | 118944    | 2.65      | out(10,10), pad(1,1), stride(1,1), filter: 1x3x3x16 | Internal |
+    | depthwise conv  | 1325229 | 755116    | 1.75      | out(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | Internal |
+    | max pool        | 274866  | 21724     | 12.65     | input(16,16), filter(1x3x3x16) | Internal |
+    | avg pool        | 297200  | 75257     | 3.95      | input(16,16), filter(1x3x3x16) | Internal |
+    | fully connected | 7594    | 4280      | 1.77      | len: 271, ch = 3, non-zero input offset | Internal |
     | prelu (relu6)   | 625     | 123       | 5.08      | size: 1615  | Internal  |
-    | softmax         | 11049   | 7693      | 1.44      | h: 8, w: 32 | Internal  |
-    | hard_swish      | 620892  | 421665    | 1.47      | size: 12544 | Internal  |
-    | mean            | 10417   | 4885      | 2.13      | 7x7x16      | Internal  |
+    | softmax         | 12090   | 8225      | 1.47      | h: 8, w: 32 | Internal  |
+    | hard_swish      | 620950  | 421618    | 1.47      | size: 12544 | Internal  |
+    | mean            | 10447   | 4399      | 2.37      | 7x7x16      | Internal  |
 
 
   * Kernelwise performance on ESP32-S3 chip
@@ -105,7 +105,6 @@ The library contains optimised NN (Neural Network) functions for various Espress
   - The above is time taken for execution of the `invoke()` call
   - SPIRAM used for TensorArena.
   - Person detection on ESP32-S3 with internal RAM: 47ms
-  - ESP32-P4 optimisation is work in progress
   - `Without ESP-NN` case is when `esp-nn` is completely disabled by removing below flag from [CMakeLists.txt](CMakeLists.txt):
     ```cmake
       # enable ESP-NN optimizations by Espressif
