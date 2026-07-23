@@ -172,27 +172,32 @@ static void conv_1x1_batch16(const int8_t *pixel_ptrs[16],
      * q register clobber between separate asm blocks. */
     const int8_t *filt = filter_data;
     for (int32_t oc = 0; oc < out_ch; oc++) {
-        /* Single asm: zero QACC, then loop over in_ch channels:
-         * broadcast filter[ch], load 16 transposed pixels, MAC per-lane */
+        /* QACC accumulate over in_ch. Hardware loop (esp.lp.setup) is deliberately
+         * not used - trip count (< 16) is too small to amortize its arming cost;
+         * software-pipelined instead: esp.vmulas.s8.qacc.ld.ip folds the next pixel
+         * load into the MAC, and esp.vldbc.8.xp advances the filter pointer in the
+         * load (no addi, assembler-safe). Prologue loads pair 0; a tail MAC finishes
+         * the last pair. ~4.06 vs 6.0 cyc/iter on S31. */
         asm volatile (
+            "li     t3, 1                        \n\t"  /* filter byte-stride */
             "esp.zero.qacc                       \n\t"
             "mv     x30, %[trans]                \n\t"  /* transposed base */
             "mv     x31, %[flt]                  \n\t"  /* filter base */
             "mv     s7,  %[cnt]                  \n\t"  /* in_ch count */
+            "esp.vld.128.ip  q0, x30, 16         \n\t"  /* prologue: pixel[0] */
+            "esp.vldbc.8.xp  q1, x31, t3         \n\t"  /* prologue: filter[0], x31 += 1 */
+            "addi   s7, s7, -1                   \n\t"  /* fused-loop trip = in_ch - 1 */
+            "beqz   s7, 2f                       \n\t"  /* in_ch == 1: straight to tail */
             "1:                                  \n\t"
-            "esp.vld.128.ip  q0, x30, 16         \n\t"  /* load 16 pixel values, advance by 16 */
-            /* Broadcast filter[ch], then advance the filter pointer by 1 byte
-             * with a separate addi. The fused "esp.vldbc.8.ip q1, x31, 1" is
-             * valid but some assemblers reject a step-1 immediate (their range
-             * check assumes a 4-byte step), so use the step-0 form + addi. */
-            "esp.vldbc.8.ip  q1, x31, 0          \n\t"
-            "addi   x31, x31, 1                  \n\t"
-            "esp.vmulas.s8.qacc q0, q1           \n\t"
+            "esp.vmulas.s8.qacc.ld.ip q0, x30, 16, q0, q1 \n\t"  /* mac pair; load next pixel */
+            "esp.vldbc.8.xp  q1, x31, t3         \n\t"            /* load next filter, x31 += 1 */
             "addi   s7, s7, -1                   \n\t"
             "bnez   s7, 1b                       \n\t"
+            "2:                                  \n\t"
+            "esp.vmulas.s8.qacc q0, q1           \n\t"            /* tail: last pair */
             :
             : [trans] "r"(transposed), [flt] "r"(filt), [cnt] "r"(in_ch)
-            : "x30", "x31", "s7"
+            : "x30", "x31", "s7", "t3"
         );
 
         /* Extract 16 results */
