@@ -64,69 +64,58 @@ static inline __attribute__((always_inline))
 int32_t pie_dot_s8(const int8_t *a, const int8_t *b, int32_t len)
 {
     int32_t result = 0;
-    int32_t idx = 0;
 
     if (len >= 32) {
+        int32_t c32 = (len >> 5) - 1;
+        int32_t rem16 = len & 16;
         asm volatile (
             "esp.zero.xacc                          \n\t"
             "mv     x30, %[in]                      \n\t"
             "mv     x31, %[flt]                     \n\t"
-            "li     %[idx], 32                      \n\t"
-            "addi   s7, %[len], -31                 \n\t"
             "esp.vld.128.ip  q0, x30, 16            \n\t"
             "esp.vld.128.ip  q2, x30, 16            \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vld.128.ip  q3, x31, 16            \n\t"
-            "j      2f                              \n\t"
-            "1:                                     \n\t"
+            "beqz   %[c32], 2f                      \n\t"
+            /* zero-overhead loop; end label ON last body insn */
+            "esp.lp.setup 0, %[c32], 1f             \n\t"
             "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vmulas.s8.xacc.ld.ip q2, x30, 16, q2, q3 \n\t"
+            "1:                                     \n\t"
             "esp.vld.128.ip  q3, x31, 16            \n\t"
-            "addi   %[idx], %[idx], 32              \n\t"
             "2:                                     \n\t"
-            "blt    %[idx], s7, 1b                  \n\t"
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
             "esp.vmulas.s8.xacc  q2, q3             \n\t"
-            "addi   s7, %[len], -15                 \n\t"
-            "bge    %[idx], s7, 3f                  \n\t"
+            "beqz   %[rem16], 3f                    \n\t"
             "esp.vld.128.ip  q0, x30, 16            \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
-            "addi   %[idx], %[idx], 16              \n\t"
             "3:                                     \n\t"
             "esp.movx.r.xacc.l   x30                \n\t"
             "mv     %[res], x30                     \n\t"
-            : [idx] "+r"(idx), [res] "=r"(result)
-            : [in] "r"(a), [flt] "r"(b), [len] "r"(len)
-            : "x30", "x31", "s7"
+            : [res] "=r"(result)
+            : [in] "r"(a), [flt] "r"(b), [c32] "r"(c32), [rem16] "r"(rem16)
+            : "x30", "x31"
         );
     } else if (len >= 16) {
+        /* exactly one full 16-element block */
         asm volatile (
             "esp.zero.xacc                          \n\t"
             "mv     x30, %[in]                      \n\t"
             "mv     x31, %[flt]                     \n\t"
-            "li     %[idx], 16                      \n\t"
-            "addi   s7, %[len], -15                 \n\t"
             "esp.vld.128.ip  q0, x30, 16            \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
-            "j      5f                              \n\t"
-            "4:                                     \n\t"
-            "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
-            "esp.vld.128.ip  q1, x31, 16            \n\t"
-            "addi   %[idx], %[idx], 16              \n\t"
-            "5:                                     \n\t"
-            "blt    %[idx], s7, 4b                  \n\t"
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
             "esp.movx.r.xacc.l   x30                \n\t"
             "mv     %[res], x30                     \n\t"
-            : [idx] "+r"(idx), [res] "=r"(result)
-            : [in] "r"(a), [flt] "r"(b), [len] "r"(len)
-            : "x30", "x31", "s7"
+            : [res] "=r"(result)
+            : [in] "r"(a), [flt] "r"(b)
+            : "x30", "x31"
         );
     }
 
-    for (; idx < len; idx++) {
+    for (int32_t idx = len & ~15; idx < len; idx++) {
         result += (int32_t)a[idx] * (int32_t)b[idx];
     }
     return result;
@@ -336,37 +325,35 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
                     goto skip_asm;
                 }
 
+                int32_t c16 = (in_channels >> 4) - 1;
                 asm volatile (
-                    "li %0, 16                      \n\t"
-                    "addi s7, %4, -15               \n\t"
-                    "mv x30, %1                     \n\t"
-                    "mv x31, %2                     \n\t"
+                    "mv x30, %[inp]                 \n\t"
+                    "mv x31, %[flt]                 \n\t"
                     "esp.zero.xacc                  \n\t"
                     "esp.vld.128.ip  q0, x30, 16    \n\t"
                     "esp.vld.128.ip  q1, x31, 16    \n\t"
 
-                    "j .loop16_end  \n\t"
-
-                    ".loop16_start:      \n\t"
+                    "beqz %[c16], 2f                \n\t"
+                    /* zero-overhead loop; end label ON last body insn */
+                    "esp.lp.setup 0, %[c16], 1f     \n\t"
                     "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
-                    "esp.vld.128.ip  q1, x31, 16                     \n\t"
-                    "addi %0, %0, 16                \n\t"   // in_ch_idx += 16
-
-                    ".loop16_end:    \n\t"
-                    "blt %0, s7, .loop16_start \n\t"  // if in_ch_idx < `in_channels - 15` abort
+                    "1:                             \n\t"
+                    "esp.vld.128.ip  q1, x31, 16    \n\t"
+                    "2:                             \n\t"
 
                     // move input_ptr, filter_ptr and conv_out
-                    "mv %1, x30                     \n\t"
-                    "mv %2, x31                     \n\t"
+                    "mv %[inp], x30                 \n\t"
+                    "mv %[flt], x31                 \n\t"
                     "esp.vmulas.s8.xacc  q0, q1     \n\t"
                     /* esp.movx GPR operand must be x26-x31 (required on S31) */
                     "esp.movx.r.xacc.l  x29         \n\t"
-                    "mv %3, x29                     \n\t"
+                    "mv %[out], x29                 \n\t"
 
-                    : "+r" (in_ch_idx), "+r" (input_ptr), "+r" (filter_ptr), "=r" (conv_out)
-                    :  "r"(in_channels)
-                    : "x29", "x30", "x31", "s7"
+                    : [inp] "+r" (input_ptr), [flt] "+r" (filter_ptr), [out] "=r" (conv_out)
+                    : [c16] "r"(c16)
+                    : "x29", "x30", "x31"
                 );
+                in_ch_idx = in_channels & ~15;
 skip_asm:
 #endif
                 for (; in_ch_idx < in_channels - 3; in_ch_idx += 4) {
@@ -481,33 +468,35 @@ static void esp_nn_conv_s8_padded(
                     goto skip_asm_pad0;
                 }
 
+                int32_t c16 = (row_size >> 4) - 1;
                 asm volatile (
-                    "li %0, 16                      \n\t"
-                    "addi s7, %3, -15               \n\t"
-                    "mv x30, %1                     \n\t"
-                    "mv x31, %2                     \n\t"
+                    "mv x30, %[inp]                 \n\t"
+                    "mv x31, %[flt]                 \n\t"
                     "esp.vld.128.ip  q0, x30, 16    \n\t"
                     "esp.vld.128.ip  q1, x31, 16    \n\t"
 
-                    "j .loop16_pad0_end  \n\t"
-
-                    ".loop16_pad0_start:      \n\t"
+                    /* NOTE: software loop kept deliberately - row_size here is
+                     * filter_wd * in_ch with small in_ch, so the trip count is
+                     * 0-2; esp.lp.setup cost cannot amortize over that. */
+                    "beqz %[c16], 2f                \n\t"
+                    "mv   s7, %[c16]                \n\t"
+                    "1:                             \n\t"
                     "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
-                    "esp.vld.128.ip  q1, x31, 16                     \n\t"
-                    "addi %0, %0, 16                \n\t"   // in_ch_idx += 16
+                    "esp.vld.128.ip  q1, x31, 16    \n\t"
+                    "addi s7, s7, -1                \n\t"
+                    "bnez s7, 1b                    \n\t"
+                    "2:                             \n\t"
 
-                    ".loop16_pad0_end:    \n\t"
-                    "blt %0, s7, .loop16_pad0_start \n\t"  // if in_ch_idx < `in_channels - 15` abort
-
-                    // move input_ptr, filter_ptr and conv_out
-                    "mv %1, x30                     \n\t"
-                    "mv %2, x31                     \n\t"
+                    // move input_ptr and filter_ptr
+                    "mv %[inp], x30                 \n\t"
+                    "mv %[flt], x31                 \n\t"
                     "esp.vmulas.s8.xacc  q0, q1     \n\t"
 
-                    : "+r" (row_idx), "+r" (input_data_ptr), "+r" (filter_data_ptr)
-                    :  "r"(row_size)
+                    : [inp] "+r" (input_data_ptr), [flt] "+r" (filter_data_ptr)
+                    : [c16] "r"(c16)
                     : "x30", "x31", "s7"
                 );
+                row_idx = row_size & ~15;
 skip_asm_pad0:
 #endif
                     for (; row_idx < row_size - 3; row_idx += 4) {

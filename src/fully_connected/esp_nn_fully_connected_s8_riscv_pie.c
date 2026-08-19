@@ -26,86 +26,75 @@ static inline __attribute__((always_inline))
 int32_t fc_dot_s8_pie(const int8_t *input, const int8_t *filter, int32_t row_len)
 {
     int32_t result = 0;
-    int32_t idx = 0;
 
     if (row_len >= 32) {
         /* Double-pumped: process 32 elements per iteration
-         * Uses q0/q1 for first pair, q2/q3 for second pair */
+         * Uses q0/q1 for first pair, q2/q3 for second pair.
+         * Software pipelined: first block is loaded up front, each loop
+         * iteration MACs one block and loads the next -> N-1 iterations. */
+        int32_t c32 = (row_len >> 5) - 1;
+        int32_t rem16 = row_len & 16;
         asm volatile (
             "esp.zero.xacc                          \n\t"
             "mv     x30, %[in]                      \n\t"
             "mv     x31, %[flt]                     \n\t"
-            "li     %[idx], 32                      \n\t"
-            "addi   s7, %[len], -31                 \n\t"
 
             /* Prime the pipeline: load first 32 bytes */
             "esp.vld.128.ip  q0, x30, 16            \n\t"
             "esp.vld.128.ip  q2, x30, 16            \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vld.128.ip  q3, x31, 16            \n\t"
-            "j      2f                              \n\t"
 
-            "1:                                     \n\t"
+            "beqz   %[c32], 2f                      \n\t"
+            /* Zero-overhead hardware loop; end label sits ON the last insn */
+            "esp.lp.setup 0, %[c32], 1f             \n\t"
             /* MAC pair 1 + load next input[0:16] */
             "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
             /* Load next filter[0:16] while MAC settles */
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             /* MAC pair 2 + load next input[16:32] */
             "esp.vmulas.s8.xacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-            /* Load next filter[16:32] - interleaved with counter */
+            "1:                                     \n\t"
+            /* Load next filter[16:32] */
             "esp.vld.128.ip  q3, x31, 16            \n\t"
-            "addi   %[idx], %[idx], 32              \n\t"
 
             "2:                                     \n\t"
-            "blt    %[idx], s7, 1b                  \n\t"
-
             /* Drain pipeline: final two MACs */
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
             "esp.vmulas.s8.xacc  q2, q3             \n\t"
 
-            /* Handle 16-element remainder if any (idx+16 <= row_len) */
-            "addi   s7, %[len], -15                 \n\t"
-            "bge    %[idx], s7, 3f                  \n\t"
+            /* Handle 16-element remainder if any */
+            "beqz   %[rem16], 3f                    \n\t"
             "esp.vld.128.ip  q0, x30, 16            \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
-            "addi   %[idx], %[idx], 16              \n\t"
             "3:                                     \n\t"
 
             "esp.movx.r.xacc.l   x30                \n\t"
             "mv     %[res], x30                     \n\t"
-            : [idx] "+r"(idx), [res] "=r"(result)
-            : [in] "r"(input), [flt] "r"(filter), [len] "r"(row_len)
-            : "x30", "x31", "s7"
+            : [res] "=r"(result)
+            : [in] "r"(input), [flt] "r"(filter), [c32] "r"(c32), [rem16] "r"(rem16)
+            : "x30", "x31"
         );
     } else if (row_len >= 16) {
-        /* Single-pumped for 16-31 element rows */
+        /* Exactly one full 16-element block for 16-31 element rows */
         asm volatile (
             "esp.zero.xacc                          \n\t"
             "mv     x30, %[in]                      \n\t"
             "mv     x31, %[flt]                     \n\t"
-            "li     %[idx], 16                      \n\t"
-            "addi   s7, %[len], -15                 \n\t"
             "esp.vld.128.ip  q0, x30, 16            \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
-            "j      5f                              \n\t"
-            "4:                                     \n\t"
-            "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
-            "esp.vld.128.ip  q1, x31, 16            \n\t"
-            "addi   %[idx], %[idx], 16              \n\t"
-            "5:                                     \n\t"
-            "blt    %[idx], s7, 4b                  \n\t"
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
             "esp.movx.r.xacc.l   x30                \n\t"
             "mv     %[res], x30                     \n\t"
-            : [idx] "+r"(idx), [res] "=r"(result)
-            : [in] "r"(input), [flt] "r"(filter), [len] "r"(row_len)
-            : "x30", "x31", "s7"
+            : [res] "=r"(result)
+            : [in] "r"(input), [flt] "r"(filter)
+            : "x30", "x31"
         );
     }
 
     /* Scalar remainder */
-    for (; idx < row_len; idx++) {
+    for (int32_t idx = row_len & ~15; idx < row_len; idx++) {
         result += (int32_t)input[idx] * (int32_t)filter[idx];
     }
 

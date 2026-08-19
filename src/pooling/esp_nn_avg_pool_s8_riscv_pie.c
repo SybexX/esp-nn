@@ -77,17 +77,16 @@ void esp_nn_avg_pool_s8_riscv_pie(const int8_t *input,
 
                     asm volatile (
                         "mv     x30, %[ptr]              \n\t"
-                        "mv     s7,  %[cnt]              \n\t"
-                        "1:                              \n\t"
+                        /* zero-overhead loop; end label ON last body insn */
+                        "esp.lp.setup 0, %[cnt], 1f      \n\t"
                         "esp.vld.128.ip  q0, x30, 0      \n\t"
                         "esp.vmulas.s8.qacc q0, q7       \n\t"
+                        "1:                              \n\t"
                         "add    x30, x30, %[stride]      \n\t"
-                        "addi   s7, s7, -1               \n\t"
-                        "bnez   s7, 1b                   \n\t"
                         :
                         : [ptr] "r"(row_ptr), [cnt] "r"(fx_count),
                           [stride] "r"((int32_t)channels)
-                        : "x30", "s7"
+                        : "x30"
                     );
                 }
 

@@ -136,6 +136,14 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                     const int8_t *_ip = input_data + (_iy * input_wd + base_x + filter_x_start) * channels + (ch_off); \
                     const int8_t *_fp = filter_data + (_fy * filter_wd + filter_x_start) * channels + (ch_off); \
                     int _fc = filter_x_end - filter_x_start; \
+                    /* NOTE: software loop kept deliberately - trip count is
+                     * the filter width (3-5) and two hw-loop variants
+                     * measured SLOWER on ESP32-S31: (a) esp.lp.setup per
+                     * row (+1.7%), (b) fused whole-window block arming
+                     * once via esp.lp.starti/endi + esp.lp.count per row
+                     * (+2.5-4.3%, despite also removing per-row C address
+                     * arithmetic). Loop-unit CSR writes cost more than the
+                     * addi+bnez they replace below ~8 iterations. */ \
                     asm volatile ( \
                         "mv     x30, %[ip]               \n\t" \
                         "mv     x31, %[fp]               \n\t" \
