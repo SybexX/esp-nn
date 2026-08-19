@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <common_functions.h>
 
-void esp_nn_mean_nhwc_s8_esp32p4(const int8_t *input,
+void esp_nn_mean_nhwc_s8_riscv_pie(const int8_t *input,
                                   int8_t *output,
                                   const int32_t height,
                                   const int32_t width,
@@ -56,17 +56,16 @@ void esp_nn_mean_nhwc_s8_esp32p4(const int8_t *input,
             "esp.zero.qacc                   \n\t"
             /* Accumulate loop: stride = channels between spatial positions */
             "mv     x30, %[base]            \n\t"
-            "mv     s7,  %[cnt]             \n\t"
-            "1:                             \n\t"
+            /* zero-overhead loop; end label ON last body insn */
+            "esp.lp.setup 0, %[cnt], 1f     \n\t"
             "esp.vld.128.ip  q0, x30, 0     \n\t"
             "esp.vmulas.s8.qacc q0, q7      \n\t"
+            "1:                             \n\t"
             "add    x30, x30, %[stride]     \n\t"
-            "addi   s7, s7, -1              \n\t"
-            "bnez   s7, 1b                  \n\t"
             :
             : [one] "r"(&one_val), [base] "r"(base_ptr),
               [cnt] "r"(num_elements), [stride] "r"((int32_t)channels)
-            : "x30", "s7"
+            : "x30"
         );
 
         int32_t sums[16] __attribute__((aligned(16)));

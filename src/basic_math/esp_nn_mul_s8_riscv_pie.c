@@ -12,7 +12,7 @@
  * Uses inlined fast requantization with 4x unrolled loop.
  * Interleaves independent computations to hide latency.
  */
-void esp_nn_mul_elementwise_s8_esp32p4(const int8_t *input1_data,
+void esp_nn_mul_elementwise_s8_riscv_pie(const int8_t *input1_data,
                                         const int8_t *input2_data,
                                         const int32_t input1_offset,
                                         const int32_t input2_offset,
