@@ -52,8 +52,18 @@
 #include "esp_nn_generic_opt.h"
 
 #include <common_functions.h>
+#include "../common/esp_nn_filter_sum_riscv_pie.h"
 
 static int16_t *scratch_buffer = NULL;
+
+/* Sum via the shared PIE dot-against-ones helper (see the header for why
+ * this must not be re-derived privately). */
+static int32_t conv_filter_byte_sum(const int8_t *data, int32_t len)
+{
+    return esp_nn_filter_sum_s8_riscv_pie(data, len);
+}
+
+
 
 /**
  * Reusable PIE-accelerated dot product (same as FC version).
@@ -296,18 +306,8 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
     /* pre-calculate filter_sum * input_offset */
     const int8_t *filter_ptr = filter_data;
     for (int32_t out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
-        int32_t sum = 0;
-        int32_t in_ch_idx = 0;
-        for (; in_ch_idx < in_channels - 3; in_ch_idx += 4) {
-            sum += *filter_ptr++;
-            sum += *filter_ptr++;
-            sum += *filter_ptr++;
-            sum += *filter_ptr++;
-        }
-        for (; in_ch_idx < in_channels; in_ch_idx ++) {
-            sum += *filter_ptr++;
-        }
-        filter_sum[out_ch_idx] = sum * input_offset;
+        filter_sum[out_ch_idx] = conv_filter_byte_sum(
+                filter_data + out_ch_idx * in_channels, in_channels) * input_offset;
     }
 
     /* When in_ch < 16: use QACC batch path (16 pixels at once) or channel padding.
@@ -477,21 +477,12 @@ static void esp_nn_conv_s8_padded(
     int32_t *filter_sum = (int32_t *) scratch; // alignment of 4 bytes assumed
 
     /* pre-calculate filter_sum * input_offset */
-    const int8_t *filter_ptr = filter_data;
-    for (int32_t out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
-        int32_t sum = 0;
-        int32_t filter_len = filter_wd * filter_ht * in_channels;
-        int32_t filter_idx = 0;
-        for (; filter_idx < filter_len - 3; filter_idx += 4) {
-            sum += *filter_ptr++;
-            sum += *filter_ptr++;
-            sum += *filter_ptr++;
-            sum += *filter_ptr++;
+    {
+        const int32_t filter_len = filter_wd * filter_ht * in_channels;
+        for (int32_t out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
+            filter_sum[out_ch_idx] = conv_filter_byte_sum(
+                    filter_data + out_ch_idx * filter_len, filter_len) * input_offset;
         }
-        for (; filter_idx < filter_len; filter_idx++) {
-            sum += *filter_ptr++;
-        }
-        filter_sum[out_ch_idx] = sum * input_offset;
     }
 
     const int32_t row_size = filter_wd * in_channels;
@@ -700,13 +691,9 @@ static void esp_nn_conv_s8_im2col(
     int8_t *im2col_buf = (int8_t *)scratch + out_ch * sizeof(int32_t);
 
     /* Pre-compute filter_sum * input_offset */
-    const int8_t *fptr = filter_data;
     for (int32_t oc = 0; oc < out_ch; oc++) {
-        int32_t sum = 0;
-        for (int32_t fi = 0; fi < window_len; fi++) {
-            sum += *fptr++;
-        }
-        filter_sum[oc] = sum * input_offset;
+        filter_sum[oc] = conv_filter_byte_sum(
+                filter_data + oc * window_len, window_len) * input_offset;
     }
 
     /* Process each output pixel */
@@ -809,14 +796,12 @@ static void esp_nn_conv_s8_tiled(
     int filter_sum_size = out_ch * sizeof(int32_t);
 
     /* Pre-compute filter_sum * input_offset (once for entire layer) */
-    const int8_t *fptr = filter_data;
-    for (int32_t oc = 0; oc < out_ch; oc++) {
-        int32_t sum = 0;
-        int32_t flen = filter_wd * filter_ht * in_ch;
-        for (int32_t fi = 0; fi < flen; fi++) {
-            sum += *fptr++;
+    {
+        const int32_t flen = filter_wd * filter_ht * in_ch;
+        for (int32_t oc = 0; oc < out_ch; oc++) {
+            filter_sum[oc] = conv_filter_byte_sum(
+                    filter_data + oc * flen, flen) * input_offset;
         }
-        filter_sum[oc] = sum * input_offset;
     }
 
     /* Channel-pad filter if needed (pad with 0s - doesn't affect filter_sum) */
