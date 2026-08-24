@@ -32,8 +32,9 @@ void esp_nn_depthwise_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    // run for 17 iterations
-    for (int itr = 0; itr < 17; itr++) {
+    // run for 18 iterations
+    for (int itr = 0; itr < 18; itr++) {
+        bool no_bias = false;
         /* prepare data */
         switch (itr) {
         case 0: // (ch_mult 1, (channels % 16) = 0), filter (3,3), pad (0,0)
@@ -180,6 +181,19 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 2;
             stride_ht = 2;
             break;
+        case 17: // ch_mult 1, 3x3 padded, bias == NULL
+            input_wd = 8;
+            input_ht = 8;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 16;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            no_bias = true;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -276,15 +290,17 @@ void esp_nn_depthwise_conv_s8_test()
         profile_c_start();
 
         /* C function */
+        const int32_t *bias_arg = no_bias ? NULL : (bias + 1);
+
         esp_nn_depthwise_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data + 4,
-                                      bias + 1, &output_dims, out_data_c, &conv_params, &quant_data);
+                                      bias_arg, &output_dims, out_data_c, &conv_params, &quant_data);
 
         total_c = profile_c_end();
         profile_opt_start();
 
         /* Optimized function */
         esp_nn_depthwise_conv_s8(&input_dims, input, &filter_dims, filter_data + 4,
-                                 bias + 1, &output_dims, out_data_opt, &conv_params, &quant_data);
+                                 bias_arg, &output_dims, out_data_opt, &conv_params, &quant_data);
 
         /* disable profiler */
         total_opt = profile_opt_end();
