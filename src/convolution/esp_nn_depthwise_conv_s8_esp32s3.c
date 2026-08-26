@@ -368,7 +368,9 @@ int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const data_dims_t *input_dims
 
     if ((ch_mult == 1) && (channels % 8 == 0)) {
         if(filter_wd == 3 && filter_ht == 3) {
-            if (channels % 16 == 0) {
+            /* symmetric padding only: same test the kernel dispatch makes */
+            if ((channels % 16 == 0) &&
+                (((pad_wd == 1) && (pad_ht == 1)) || ((pad_wd == 0) && (pad_ht == 0)))) {
                 if (pad_wd || pad_ht) {
                     pad_width = pad_wd * 2;
                     pad_height = pad_ht * 2;

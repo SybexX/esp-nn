@@ -8,11 +8,16 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <malloc.h>
 #include <inttypes.h>
 
 #include <esp_nn.h>
 #include "test_utils.h"
+
+/* Scratch guard: sized to absorb an overflow, not just detect it */
+#define SCRATCH_GUARD_SZ    (16 * 1024)
+#define SCRATCH_GUARD_BYTE  0x5a
 
 void esp_nn_depthwise_conv_s8_test()
 {
@@ -32,9 +37,14 @@ void esp_nn_depthwise_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    // run for 18 iterations
-    for (int itr = 0; itr < 18; itr++) {
+    // run for 19 iterations
+    for (int itr = 0; itr < 19; itr++) {
         bool no_bias = false;
+        /* Explicit output dims (0 = derive from pad/stride below). Needed for
+         * TFLite-style asymmetric "SAME" padding where only the leading
+         * (top/left) padding is passed in and trailing padding is implicit. */
+        uint16_t force_out_wd = 0, force_out_ht = 0;
+
         /* prepare data */
         switch (itr) {
         case 0: // (ch_mult 1, (channels % 16) = 0), filter (3,3), pad (0,0)
@@ -194,6 +204,19 @@ void esp_nn_depthwise_conv_s8_test()
             stride_ht = 1;
             no_bias = true;
             break;
+        case 18: // asymmetric "SAME" padding as TFLite generates it (3x3, stride 2)
+            input_wd = 49;
+            input_ht = 20;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 1;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            force_out_ht = 10; /* SAME: ceil(20/2); derived VALID value would be 9 */
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -218,6 +241,12 @@ void esp_nn_depthwise_conv_s8_test()
             out_ht = (input_ht + stride_ht - 1) / stride_ht;
         } else {
             out_ht = (input_ht + stride_ht - filter_ht) / stride_ht;
+        }
+        if (force_out_wd) {
+            out_wd = force_out_wd;
+        }
+        if (force_out_ht) {
+            out_ht = force_out_ht;
         }
 
         // if (itr == 9) {
@@ -275,14 +304,17 @@ void esp_nn_depthwise_conv_s8_test()
 
         int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(&input_dims, &filter_dims,
                                                                       &output_dims, &conv_params);
+        int8_t *scratch_guard = NULL;
         if (scratch_buf_size > 0) {
-            scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 16);
+            scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 16 + SCRATCH_GUARD_SZ);
             if (scratch_buf == NULL) {
                 printf(ANSI_COLOR_RED"[%d] scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET,
                        itr, scratch_buf_size);
                 goto dc_s8_cleanup;
             }
             int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
+            scratch_guard = (int8_t *) scratch_buf + align_sz + scratch_buf_size;
+            memset(scratch_guard, SCRATCH_GUARD_BYTE, SCRATCH_GUARD_SZ);
             esp_nn_set_depthwise_conv_scratch_buf(scratch_buf + align_sz);
         }
 
@@ -304,6 +336,22 @@ void esp_nn_depthwise_conv_s8_test()
 
         /* disable profiler */
         total_opt = profile_opt_end();
+
+        /* scan whole guard: extent, not just first hit */
+        int overflow = 0;
+        for (int i = 0; scratch_guard && i < SCRATCH_GUARD_SZ; i++) {
+            if (scratch_guard[i] != (int8_t) SCRATCH_GUARD_BYTE) {
+                overflow = i + 1;
+            }
+        }
+        if (overflow) {
+            printf(ANSI_COLOR_RED"[%3d] scratch overflow: wrote at least %d bytes past"
+                   " reported size %d [pad: (%d, %d), stride: (%d, %d), out: (%3d,%3d),"
+                   " ch %3d]\n"ANSI_COLOR_RESET,
+                   itr, overflow, scratch_buf_size, pad_wd, pad_ht,
+                   stride_wd, stride_ht, out_wd, out_ht, channels);
+            goto dc_s8_cleanup;
+        }
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, out_size);
         if (ret == false) {
