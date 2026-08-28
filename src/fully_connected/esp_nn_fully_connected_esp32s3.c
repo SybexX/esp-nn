@@ -73,6 +73,81 @@ extern int32_t esp_nn_dot_s8_unaligned_esp32s3(const int8_t *a,
  * input. Anything less has to go to the ansi reference. */
 #define FC_S16_INPUT_ALIGN  8
 
+/* When the dot path beats the fused s16 assembly. It has ~2x the assembly's
+ * throughput but pays a per-channel filter-sum the assembly folds into its MAC
+ * for free, plus a scalar tail once more per pass for a row_len that is not a
+ * whole number of vectors. Two regimes, both measured on S3 (row_len 16..1024,
+ * out_ch 1..256; out_ch never shifts the boundary):
+ *   input_offset != 0: correction pass runs, tail paid twice -> 192 + tail*16
+ *   input_offset == 0: no correction pass, tail paid once    ->  64 + tail*8
+ * The io==0 constants being exactly half-ish of the io!=0 ones matches the
+ * model: one filter pass and one tail instead of two of each.
+ *
+ * These constants are empirical, so they can drift with cache geometry: the
+ * two-pass case doubles the traffic once the filter outgrows dcache. Both paths
+ * are bit-exact, so a mis-tuned boundary costs a few percent, never
+ * correctness. Fusing the sum into the MAC pass would remove the second pass
+ * and the boundary with it. */
+static inline bool fc_dot_path_wins(uint16_t row_len, int32_t input_offset)
+{
+    const int tail = row_len & 15;
+    if (input_offset == 0) {
+        return row_len >= 64 + tail * 8;
+    }
+    return row_len >= 192 + tail * 16;
+}
+
+/* 16 bytes of 1s: summing an int8 array is a dot product against them, and a
+ * single vector load keeps that operand in a register for the whole row. The
+ * earlier form kept a 512 byte block of 1s and streamed it through the dot,
+ * which loaded the constant operand again for every chunk. */
+static const int8_t fc_one = 1;
+
+/* Sum of `blocks` 16-byte chunks from an aligned p, as a dot product against 1s
+ * broadcast into q1 - only the data operand is fetched. */
+static inline int32_t fc_sum_blocks16(const int8_t *p, int blocks)
+{
+    int32_t acc;
+    asm volatile (
+        "ee.zero.accx                          \n"
+        "ee.vldbc.8         q1, %[one]         \n"  /* 1s stay in q1 */
+        "loopgtz            %[n], .Lfcs%=      \n"
+        "ee.vld.128.ip      q0, %[p], 16       \n"
+        "ee.vmulas.s8.accx  q0, q1             \n"
+        ".Lfcs%=:                              \n"
+        "nop                                   \n"
+        "nop                                   \n"
+        "rur.accx_0         %[acc]             \n"
+        : [acc] "=r" (acc), [p] "+r" (p), [n] "+r" (blocks)
+        : [one] "r" (&fc_one)
+        : "memory"
+    );
+    return acc;
+}
+
+/* Sum of an int8 array (esp-nn#36 was the scalar form of this). Summing is order
+ * independent, so the row is walked to the next 16-byte boundary in scalar and
+ * the rest vectorized: ee.vld.128 needs the alignment, and this way nothing is
+ * read past p + len. */
+static inline int32_t fc_filter_sum(const int8_t *p, int len)
+{
+    int32_t sum = 0;
+    int i = 0;
+
+    while (i < len && (((uintptr_t)(p + i)) & 15)) {
+        sum += p[i++];
+    }
+    const int blocks = (len - i) >> 4;
+    if (blocks > 0) {
+        sum += fc_sum_blocks16(p + i, blocks);
+        i += blocks << 4;
+    }
+    for (; i < len; i++) {
+        sum += p[i];
+    }
+    return sum;
+}
+
 void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
                                        const int32_t input_offset,
                                        const uint16_t row_len,
@@ -94,7 +169,7 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
     const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
                                      && ((row_len & 15) == 0);
 
-    if (__builtin_expect(filter_offset != 0 || row_len < 16
+    if (__builtin_expect(filter_offset != 0 || !fc_dot_path_wins(row_len, input_offset)
         || (!input_aligned && !filter_rows_aligned), 0)) {
         if ((uintptr_t)input_data & (FC_S16_INPUT_ALIGN - 1)) {
             esp_nn_fully_connected_s8_ansi(input_data, input_offset, row_len,
@@ -120,11 +195,7 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
             const int8_t *f_ptr = filter_data + ch * row_len;
             int32_t corr = 0;
             if (input_offset != 0) {
-                int32_t filter_sum = 0;
-                for (int i = 0; i < row_len; i++) {
-                    filter_sum += f_ptr[i];
-                }
-                corr = filter_sum * input_offset;
+                corr = fc_filter_sum(f_ptr, row_len) * input_offset;
             }
             if (bias) {
                 corr += bias[ch];
@@ -176,7 +247,7 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
     const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
                                      && ((row_len & 15) == 0);
 
-    if (__builtin_expect(filter_offset != 0 || row_len < 16
+    if (__builtin_expect(filter_offset != 0 || !fc_dot_path_wins(row_len, input_offset)
         || (!input_aligned && !filter_rows_aligned), 0)) {
         if ((uintptr_t)input_data & (FC_S16_INPUT_ALIGN - 1)) {
             esp_nn_fully_connected_per_ch_s8_ansi(input_data, input_offset, row_len,
@@ -201,11 +272,7 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
             const int8_t *f_ptr = filter_data + ch * row_len;
             int32_t corr = 0;
             if (input_offset != 0) {
-                int32_t filter_sum = 0;
-                for (int i = 0; i < row_len; i++) {
-                    filter_sum += f_ptr[i];
-                }
-                corr = filter_sum * input_offset;
+                corr = fc_filter_sum(f_ptr, row_len) * input_offset;
             }
             if (bias) {
                 corr += bias[ch];

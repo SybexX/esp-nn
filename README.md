@@ -54,7 +54,7 @@ The library contains optimised NN (Neural Network) functions for various Espress
     | depthwise conv  | 1325229 | 755116    | 1.75      | out(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | Internal |
     | max pool        | 274866  | 21724     | 12.65     | input(16,16), filter(1x3x3x16) | Internal |
     | avg pool        | 297200  | 75257     | 3.95      | input(16,16), filter(1x3x3x16) | Internal |
-    | fully connected | 7594    | 4280      | 1.77      | len: 271, ch = 3, non-zero input offset | Internal |
+    | fully connected | 7547    | 1475      | 5.11      | len: 271, ch = 3, non-zero input offset | Internal |
     | prelu (relu6)   | 625     | 123       | 5.08      | size: 1615  | Internal  |
     | softmax         | 12090   | 8225      | 1.47      | h: 8, w: 32 | Internal  |
     | hard_swish      | 620950  | 421618    | 1.47      | size: 12544 | Internal  |
@@ -76,7 +76,7 @@ The library contains optimised NN (Neural Network) functions for various Espress
     | depthwise conv  | 1671363  | 372435    | 4.49      | input(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | External |
     | max pool        | 376294   | 48069     | 7.83      | input(16,16), filter(1x3x3x16) | Internal |
     | avg pool        | 427293   | 118052    | 3.62      | input(16,16), filter(1x3x3x16) | Internal |
-    | fully connected | 8443     | 1078      | 7.83      | len: 271, ch = 3 | Internal |
+    | fully connected | 8439     | 1543      | 5.47      | len: 271, ch = 3, non-zero input offset | Internal |
     | softmax         | 15209    | 11107     | 1.37      | h: 8, w: 32 | Internal  |
     | prelu (relu6)   | 1125     | 98        | 11.48     | size: 1615  | Internal  |
 
