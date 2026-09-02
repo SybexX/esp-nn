@@ -681,9 +681,10 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                     int16_t *dst = tile_buf;
                     for (int r = in_row_start; r < in_row_end; r++) {
                         if (r < 0 || r >= input_ht) {
-                            /* Padding row: fill with input_offset */
+                            /* Padding row. Valid rows are stored as
+                             * (q + in_offset), so a real zero is 0 here. */
                             for (int i = 0; i < input_wd * channels; i++) {
-                                dst[i] = (int16_t)input_offset;
+                                dst[i] = 0;
                             }
                         } else {
                             /* Valid row: convert s8 to s16 with offset */

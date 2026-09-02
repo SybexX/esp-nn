@@ -38,7 +38,7 @@ void esp_nn_depthwise_conv_s8_test()
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
     // run for 19 iterations
-    for (int itr = 0; itr < 19; itr++) {
+    for (int itr = 0; itr < 21; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -216,6 +216,30 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 2;
             stride_ht = 2;
             force_out_ht = 10; /* SAME: ceil(20/2); derived VALID value would be 9 */
+            break;
+        case 19: // time-major dw (3,1), SAME pad, big enough to tile the s16 path
+            input_wd = 1;
+            input_ht = 384;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 128;
+            pad_wd = 0;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 20: // same, stride 2, 256 channels
+            input_wd = 1;
+            input_ht = 192;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 256;
+            pad_wd = 0;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 2;
             break;
         default:
             input_wd = 6;
