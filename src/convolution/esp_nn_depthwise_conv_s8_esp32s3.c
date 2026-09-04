@@ -155,6 +155,11 @@ extern void esp_nn_s8_to_s16_esp32s3(const int8_t *src, int16_t *dst, const int 
 extern void esp_nn_aligned_s8_to_s16_with_offset_esp32s3(const int8_t *src, int16_t *dst,
                                                          const int size, const int32_t offset);
 
+/* Unaligned-source variant. Reads up to 32 bytes past src + size and 16
+ * before src, so the row must be INTERIOR to a larger readable object. */
+extern void esp_nn_s8_to_s16_with_offset_row_esp32s3(const int8_t *src, int16_t *dst,
+                                                     const int size, const int32_t offset);
+
 static void esp_nn_depthwise_conv_s8_unrolled(const int8_t *input_data,
                                               const uint16_t input_wd,
                                               const uint16_t input_ht,
@@ -669,31 +674,46 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                                                         filter_wd, filter_ht, bias, out_data, out_wd, out_ht, out_offset, out_shift,
                                                         out_mult, activation_min, activation_max);
             } else {
-                /* Large input: process in row tiles to reduce cache pressure.
-                 * Convert only the input rows needed for each output row strip. */
+                /* Row tiles to limit cache pressure: convert only the rows
+                 * each output row needs, in SIMD. A row is reconverted per
+                 * output row; caching across rows needs a rotated window the
+                 * kernel does not accept. */
                 int16_t *tile_buf = input_data16; /* reuse scratch for tile */
+                const int row_len = input_wd * channels;
 
                 for (int out_row = 0; out_row < out_ht; out_row++) {
                     int in_row_start = out_row * stride_ht - pad_ht;
                     int in_row_end = in_row_start + filter_ht;
 
-                    /* Fill tile: pad rows that are outside input bounds */
                     int16_t *dst = tile_buf;
                     for (int r = in_row_start; r < in_row_end; r++) {
                         if (r < 0 || r >= input_ht) {
                             /* Padding row. Valid rows are stored as
                              * (q + in_offset), so a real zero is 0 here. */
-                            for (int i = 0; i < input_wd * channels; i++) {
-                                dst[i] = 0;
-                            }
+                            memset(dst, 0, sizeof(int16_t) * (size_t)row_len);
                         } else {
-                            /* Valid row: convert s8 to s16 with offset */
-                            const int8_t *src = input_data + r * input_wd * channels;
-                            for (int i = 0; i < input_wd * channels; i++) {
-                                dst[i] = (int16_t)src[i] + (int16_t)input_offset;
+                            const int8_t *src = input_data + r * row_len;
+                            if ((((uintptr_t)src | (uintptr_t)dst) & 15) == 0) {
+                                esp_nn_aligned_s8_to_s16_with_offset_esp32s3(
+                                        src, dst, row_len, input_offset);
+                            } else if (r > 0 && r + 1 < input_ht &&
+                                       (((uintptr_t)dst & 15) == 0)) {
+                                /* row_len is the BYTE stride of an int8 row:
+                                 * at channels % 16 != 0 alternate rows start
+                                 * 8-byte aligned and the aligned converter's
+                                 * 128-bit loads need 16. Interior rows have
+                                 * neighbours covering the QUP window's
+                                 * over-read. Cases 21/22 cover this path. */
+                                esp_nn_s8_to_s16_with_offset_row_esp32s3(
+                                        src, dst, row_len, input_offset);
+                            } else {
+                                /* first/last row: no slack for the QUP window */
+                                for (int i = 0; i < row_len; i++) {
+                                    dst[i] = (int16_t)(src[i] + input_offset);
+                                }
                             }
                         }
-                        dst += input_wd * channels;
+                        dst += row_len;
                     }
 
                     /* Process one output row */
