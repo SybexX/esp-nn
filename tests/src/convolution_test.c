@@ -38,7 +38,7 @@ void esp_nn_depthwise_conv_s8_test()
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
     // run for 19 iterations
-    for (int itr = 0; itr < 23; itr++) {
+    for (int itr = 0; itr < 27; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -229,6 +229,55 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
+        case 23: // as 19, but with an ALIGNED filter: exercises the int8 (K,1) path
+            input_wd = 1;
+            input_ht = 384;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 128;
+            pad_wd = 0;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 24: // as 20, aligned filter, stride 2
+            input_wd = 1;
+            input_ht = 192;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 256;
+            pad_wd = 0;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 2;
+            break;
+        case 25: // aligned (5,1): the kernel loops over taps, so K != 3 must work
+            input_wd = 1;
+            input_ht = 256;
+            filter_ht = 5;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 128;
+            pad_wd = 0;
+            pad_ht = 2;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 26: // aligned (3,1) with bias == NULL
+            input_wd = 1;
+            input_ht = 128;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 256;
+            pad_wd = 0;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            no_bias = true;
+            break;
         case 20: // same, stride 2, 256 channels
             input_wd = 1;
             input_ht = 192;
@@ -315,7 +364,7 @@ void esp_nn_depthwise_conv_s8_test()
         int8_t *input_orig = ESP_NN_TEST_ALLOC(in_size + 16);
         int8_t *out_c_orig = ESP_NN_TEST_ALLOC(out_size + 16);
         int8_t *out_opt_orig = ESP_NN_TEST_ALLOC(out_size + 16);
-        filter_data = ESP_NN_TEST_ALLOC(filter_size);
+        filter_data = ESP_NN_TEST_ALLOC(filter_size + 16);
         bias = ESP_NN_TEST_ALLOC(bias_size * 4);
 
         if (bias == NULL || input_orig == NULL || filter_data == NULL ||
@@ -327,6 +376,16 @@ void esp_nn_depthwise_conv_s8_test()
         input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
         out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
         out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
+
+        /* Most cases pass filter_data + 4 deliberately, to keep the kernels
+         * honest about unaligned filters. Cases 21-22 need an ALIGNED filter:
+         * the int8 (K,1) path reads the caller's tensors in place, so it only
+         * engages when input, output and filter are all 16-byte aligned, and
+         * without an aligned case it would never be exercised here at all. */
+        const bool want_aligned_filter = (itr >= 23) && (itr <= 26);
+        int8_t *filter_arg = want_aligned_filter
+                ? (int8_t *) ((((uint32_t) filter_data) + 15) & ~15)
+                : filter_data + 4;
 
         /* Generate input data */
         for (int i = 0; i < in_size; ++i) {
@@ -375,14 +434,14 @@ void esp_nn_depthwise_conv_s8_test()
         /* C function */
         const int32_t *bias_arg = no_bias ? NULL : (bias + 1);
 
-        esp_nn_depthwise_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data + 4,
+        esp_nn_depthwise_conv_s8_ansi(&input_dims, input, &filter_dims, filter_arg,
                                       bias_arg, &output_dims, out_data_c, &conv_params, &quant_data);
 
         total_c = profile_c_end();
         profile_opt_start();
 
         /* Optimized function */
-        esp_nn_depthwise_conv_s8(&input_dims, input, &filter_dims, filter_data + 4,
+        esp_nn_depthwise_conv_s8(&input_dims, input, &filter_dims, filter_arg,
                                  bias_arg, &output_dims, out_data_opt, &conv_params, &quant_data);
 
         /* disable profiler */
