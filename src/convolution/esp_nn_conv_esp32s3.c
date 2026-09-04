@@ -103,8 +103,9 @@ extern void esp_nn_conv_s8_1x1(const int8_t *input,
                                 const int32_t activation_max,
                                 void *scratch);
 
-/* Debug heap checks — enable to find buffer overruns */
-#if CONFIG_IDF_CMAKE
+/* Debug heap checks - opt-in: a full heap walk per conv call is far too
+ * expensive (and too fragile) to ship enabled. */
+#ifdef ESP_NN_DEBUG_HEAP_CHECK
 #include "esp_heap_caps.h"
 #define CONV_HEAP_CHECK(tag) do { \
     if (!heap_caps_check_integrity_all(false)) { \
