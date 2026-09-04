@@ -159,10 +159,10 @@ static void conv_1x1_filter_major(const data_dims_t *input_dims,
         const int8_t *filter = filter_data + out_ch * in_channels;
         int32_t filter_sum = 0;
         if (input_offset != 0) {
-            for (int32_t in_ch = 0; in_ch < in_channels; ++in_ch) {
-                filter_sum += filter[in_ch];
-            }
-            filter_sum *= input_offset;
+            /* Vectorized like the other prepasses. It matters more here: this
+             * path is gated on a small spatial map, so the per-channel sum is
+             * a sizeable fraction of the work, not a negligible prepass. */
+            filter_sum = conv_filter_byte_sum(filter, in_channels) * input_offset;
         }
         const int32_t base = filter_sum + (bias ? bias[out_ch] : 0);
         const int32_t multiplier = quant_data->mult[out_ch];
