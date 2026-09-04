@@ -37,10 +37,10 @@ void esp_nn_depthwise_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    // The 27-30 block carries the large channel counts that regressed the P4
+    // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 31; itr++) {
+    for (int itr = 0; itr < 33; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -370,6 +370,34 @@ void esp_nn_depthwise_conv_s8_test()
             stride_ht = 1;
             no_bias = true;
             break;
+        case 31: // 264 channels: above the old 256 workspace limit AND
+                 // channels % 16 == 8. Every other large-channel case is a
+                 // multiple of 16; an 8-mod-16 count is what exposed silent
+                 // corruption in the S3 depthwise tiled path, so the PIE
+                 // paths get the same guard case.
+            input_wd = 9;
+            input_ht = 5;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 264;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 32: // 520 channels, 8 mod 16, stride 2
+            input_wd = 9;
+            input_ht = 5;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 520;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -606,7 +634,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 26; itr++) {
+    for (int itr = 0; itr < 27; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -878,6 +906,21 @@ void esp_nn_conv_s8_test()
             in_wd = 5;
             in_ht = 3;
             in_channels = 160;
+            out_channels = 640;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 26: // as the small-spatial cases but in_channels % 16 == 8: each
+                 // filter row (in_channels bytes) starts 8-byte aligned on
+                 // alternate rows - the case the aligned/unaligned dot choice
+                 // has to get right.
+            in_wd = 5;
+            in_ht = 3;
+            in_channels = 264;
             out_channels = 640;
             filter_ht = 1;
             filter_wd = 1;
