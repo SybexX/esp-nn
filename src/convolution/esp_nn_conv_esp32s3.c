@@ -86,7 +86,7 @@ extern void esp_nn_conv_s8_ansi(const data_dims_t *input_dims,
                                 const quant_data_t *quant_data);
 
 /* 1x1 conv — correct SIMD implementation */
-extern int esp_nn_conv_s8_1x1_scratch_size(int out_channels);
+extern int esp_nn_conv_s8_1x1_scratch_size(int in_channels);
 extern void esp_nn_conv_s8_1x1(const int8_t *input,
                                 const uint16_t input_wd,
                                 const uint16_t input_ht,
@@ -337,17 +337,16 @@ int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
     int align_buf_size = 64; /* alignment (16) + assembly pre/post access margin (48) */
     if ((filter_wd == 1 && filter_ht == 1 && pad_wd == 0 && pad_ht == 0) &&
             (stride_wd == 1 && stride_ht == 1)) {
+        /* Transpose buffer is used by both 1x1 kernels; the filter is not
+         * copied by either, so no filter term. */
         int transpose_buf_size = 2 * (8 * new_channels);
         if (input_wd * input_ht < 8) {
             transpose_buf_size = 0;
         }
-        if (in_ch % 8) {
-            input_scratch = input_wd * input_ht * new_channels;
-        } else {
-            input_scratch = 0;
-        }
-        filter_scratch = new_channels * out_ch;
-        return input_scratch + filter_scratch + transpose_buf_size + align_buf_size;
+        /* Neither 1x1 kernel copies or pads the input: the SIMD path
+         * transposes into the buffer above, the fallback reads in place
+         * (any alignment, any channel count). No input term. */
+        return transpose_buf_size + align_buf_size;
     } else {
         int32_t filter_row_size = filter_wd * in_ch;
         int32_t window_len = filter_wd * filter_ht * in_ch;
@@ -372,14 +371,15 @@ int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
         } else {
             input_scratch = (input_wd + pad_wd + pad_right) * (input_ht + pad_ht + pad_bottom) * in_ch;
         }
-        filter_scratch = filter_wd * filter_ht * new_channels * out_ch;
-
-        // Account for filter alignment padding (worst case)
+        /* At most one of the two filter copies is ever made, so max(), not
+         * the sum. */
         int32_t aligned_filter_row_size = ((filter_row_size + 15) / 16) * 16;
-        int filter_alignment_scratch = aligned_filter_row_size * filter_ht * out_ch;
+        int row_padded_copy = aligned_filter_row_size * filter_ht * out_ch;
+        int pointer_align_copy = filter_wd * filter_ht * in_ch * out_ch;
+        filter_scratch = max(row_padded_copy, pointer_align_copy);
 
         int offset_acc_scratch = out_ch * 4;
-        return input_scratch + filter_scratch + filter_alignment_scratch + align_buf_size + offset_acc_scratch;
+        return input_scratch + filter_scratch + align_buf_size + offset_acc_scratch;
     }
     return align_buf_size;
 }
