@@ -72,8 +72,11 @@ The library contains optimised NN (Neural Network) functions for various Espress
     | convolution     | 4712500  | 331008    | 14.24     | input(10,10), filter(64x1x1x64), pad(0,0), stride(1,1) | External |
     | convolution     | 312754   | 39022     | 8.01      | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | External |
     | convolution     | 2193289  | 394842    | 5.55      | input(8,8), filter(64x3x3x3), pad(0,0), stride(1,1) | External |
+    | convolution     | 362880   | 46838     | 7.75      | input(8,8), filter(16x3x3x16), pad(0,0), stride(2,2), SAME | Internal |
     | depthwise conv  | 1159831  | 184176    | 6.30      | input(18,18), pad(0,0), stride(1,1), filter: 1x3x3x16 | External |
     | depthwise conv  | 1671363  | 372435    | 4.49      | input(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | External |
+    | depthwise conv  | 10845578 | 2137390   | 5.07      | input (1, 384), pad(0,1), stride(1,1), filter: 1x3x1x128 | Internal |
+    | depthwise conv  | 5411399  | 1070931   | 5.05      | input (1, 192), pad(0,1), stride(1,2), filter: 1x3x1x256 | Internal |
     | max pool        | 376294   | 48069     | 7.83      | input(16,16), filter(1x3x3x16) | Internal |
     | avg pool        | 427293   | 118052    | 3.62      | input(16,16), filter(1x3x3x16) | Internal |
     | fully connected | 8439     | 1543      | 5.47      | len: 271, ch = 3, non-zero input offset | Internal |
