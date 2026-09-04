@@ -155,6 +155,11 @@ extern void esp_nn_s8_to_s16_esp32s3(const int8_t *src, int16_t *dst, const int 
 extern void esp_nn_aligned_s8_to_s16_with_offset_esp32s3(const int8_t *src, int16_t *dst,
                                                          const int size, const int32_t offset);
 
+/* Unaligned-source variant. Reads up to 32 bytes past src + size and 16
+ * before src, so the row must be INTERIOR to a larger readable object. */
+extern void esp_nn_s8_to_s16_with_offset_row_esp32s3(const int8_t *src, int16_t *dst,
+                                                     const int size, const int32_t offset);
+
 static void esp_nn_depthwise_conv_s8_unrolled(const int8_t *input_data,
                                               const uint16_t input_wd,
                                               const uint16_t input_ht,
@@ -687,9 +692,26 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                              * (q + in_offset), so a real zero is 0 here. */
                             memset(dst, 0, sizeof(int16_t) * (size_t)row_len);
                         } else {
-                            esp_nn_aligned_s8_to_s16_with_offset_esp32s3(
-                                    input_data + r * row_len, dst, row_len,
-                                    input_offset);
+                            const int8_t *src = input_data + r * row_len;
+                            if ((((uintptr_t)src | (uintptr_t)dst) & 15) == 0) {
+                                esp_nn_aligned_s8_to_s16_with_offset_esp32s3(
+                                        src, dst, row_len, input_offset);
+                            } else if (r > 0 && r + 1 < input_ht &&
+                                       (((uintptr_t)dst & 15) == 0)) {
+                                /* row_len is the BYTE stride of an int8 row:
+                                 * at channels % 16 != 0 alternate rows start
+                                 * 8-byte aligned and the aligned converter's
+                                 * 128-bit loads need 16. Interior rows have
+                                 * neighbours covering the QUP window's
+                                 * over-read. Cases 21/22 cover this path. */
+                                esp_nn_s8_to_s16_with_offset_row_esp32s3(
+                                        src, dst, row_len, input_offset);
+                            } else {
+                                /* first/last row: no slack for the QUP window */
+                                for (int i = 0; i < row_len; i++) {
+                                    dst[i] = (int16_t)(src[i] + input_offset);
+                                }
+                            }
                         }
                         dst += row_len;
                     }

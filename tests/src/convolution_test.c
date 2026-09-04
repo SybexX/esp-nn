@@ -38,7 +38,7 @@ void esp_nn_depthwise_conv_s8_test()
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
     // run for 19 iterations
-    for (int itr = 0; itr < 21; itr++) {
+    for (int itr = 0; itr < 23; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -236,6 +236,33 @@ void esp_nn_depthwise_conv_s8_test()
             filter_wd = 1;
             ch_mult = 1;
             channels = 256;
+            pad_wd = 0;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 2;
+            break;
+        case 21: // (3,1) with channels % 16 == 8. Cases 19/20 use 128 and
+                 // 256, both multiples of 16, which is why the misaligned row
+                 // start in the tiled converter went unnoticed: wrong results,
+                 // no fault. Fails without the alignment guard.
+            input_wd = 1;
+            input_ht = 384;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 168;
+            pad_wd = 0;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 22: // same, larger 8-mod-16 count and stride 2
+            input_wd = 1;
+            input_ht = 192;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 328;
             pad_wd = 0;
             pad_ht = 1;
             stride_wd = 1;
