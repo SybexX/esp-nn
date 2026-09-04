@@ -55,6 +55,7 @@
  */
 
 #include <stdio.h>
+#include "../common/esp_nn_filter_sum_esp32s3.h"
 #include <stdlib.h>
 #include <string.h>
 #include <esp_nn_defs.h>
@@ -533,10 +534,9 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
             int32_t filter_ch_size = filter_wd * filter_ht * channels;
             const int8_t *f_src = filter_data; // use ORIGINAL (not aligned) filter for sum
             for (int ch = 0; ch < out_channels; ch++) {
-                int32_t filter_sum = 0;
-                for (int i = 0; i < filter_ch_size; i++) {
-                    filter_sum += f_src[i];
-                }
+                /* esp-nn#36: this was a scalar reduction the same algorithmic
+                 * size as the conv itself, recomputed every call. */
+                int32_t filter_sum = esp_nn_filter_sum_s8_esp32s3(f_src, filter_ch_size);
                 corrections[ch] = filter_sum * input_offset;
                 if (bias) {
                     corrections[ch] += bias[ch];

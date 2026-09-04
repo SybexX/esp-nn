@@ -15,6 +15,7 @@
 #include <string.h>
 #include <common_functions.h>
 #include <esp_nn_ansi_headers.h>
+#include "../common/esp_nn_filter_sum_esp32s3.h"
 
 /* Original s16 assembly (renamed) */
 extern void esp_nn_fc_s16_esp32s3(const int8_t *input_data,
@@ -97,57 +98,6 @@ static inline bool fc_dot_path_wins(uint16_t row_len, int32_t input_offset)
     return row_len >= 192 + tail * 16;
 }
 
-/* 16 bytes of 1s: summing an int8 array is a dot product against them, and a
- * single vector load keeps that operand in a register for the whole row. The
- * earlier form kept a 512 byte block of 1s and streamed it through the dot,
- * which loaded the constant operand again for every chunk. */
-static const int8_t fc_one = 1;
-
-/* Sum of `blocks` 16-byte chunks from an aligned p, as a dot product against 1s
- * broadcast into q1 - only the data operand is fetched. */
-static inline int32_t fc_sum_blocks16(const int8_t *p, int blocks)
-{
-    int32_t acc;
-    asm volatile (
-        "ee.zero.accx                          \n"
-        "ee.vldbc.8         q1, %[one]         \n"  /* 1s stay in q1 */
-        "loopgtz            %[n], .Lfcs%=      \n"
-        "ee.vld.128.ip      q0, %[p], 16       \n"
-        "ee.vmulas.s8.accx  q0, q1             \n"
-        ".Lfcs%=:                              \n"
-        "nop                                   \n"
-        "nop                                   \n"
-        "rur.accx_0         %[acc]             \n"
-        : [acc] "=r" (acc), [p] "+r" (p), [n] "+r" (blocks)
-        : [one] "r" (&fc_one)
-        : "memory"
-    );
-    return acc;
-}
-
-/* Sum of an int8 array (esp-nn#36 was the scalar form of this). Summing is order
- * independent, so the row is walked to the next 16-byte boundary in scalar and
- * the rest vectorized: ee.vld.128 needs the alignment, and this way nothing is
- * read past p + len. */
-static inline int32_t fc_filter_sum(const int8_t *p, int len)
-{
-    int32_t sum = 0;
-    int i = 0;
-
-    while (i < len && (((uintptr_t)(p + i)) & 15)) {
-        sum += p[i++];
-    }
-    const int blocks = (len - i) >> 4;
-    if (blocks > 0) {
-        sum += fc_sum_blocks16(p + i, blocks);
-        i += blocks << 4;
-    }
-    for (; i < len; i++) {
-        sum += p[i];
-    }
-    return sum;
-}
-
 void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
                                        const int32_t input_offset,
                                        const uint16_t row_len,
@@ -195,7 +145,7 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
             const int8_t *f_ptr = filter_data + ch * row_len;
             int32_t corr = 0;
             if (input_offset != 0) {
-                corr = fc_filter_sum(f_ptr, row_len) * input_offset;
+                corr = esp_nn_filter_sum_s8_esp32s3(f_ptr, row_len) * input_offset;
             }
             if (bias) {
                 corr += bias[ch];
@@ -272,7 +222,7 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
             const int8_t *f_ptr = filter_data + ch * row_len;
             int32_t corr = 0;
             if (input_offset != 0) {
-                corr = fc_filter_sum(f_ptr, row_len) * input_offset;
+                corr = esp_nn_filter_sum_s8_esp32s3(f_ptr, row_len) * input_offset;
             }
             if (bias) {
                 corr += bias[ch];
