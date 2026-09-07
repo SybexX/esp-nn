@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <common_functions.h>
+#include "../common/esp_nn_filter_sum_riscv_pie.h"
 
 /**
  * Fully connected layer for s8 using ESP32-P4 PIE SIMD.
@@ -101,48 +102,6 @@ int32_t fc_dot_s8_pie(const int8_t *input, const int8_t *filter, int32_t row_len
     return result;
 }
 
-/* Sum of an int8 array as a dot product against 1s broadcast into q1 - only the data
- * operand is fetched. Double-pumped (32 bytes per iteration through q0 and q2)
- * so the fused MAC-and-load hides its latency. PIE takes unaligned loads
- * cheaply, so p goes in as-is. */
-static inline int32_t fc_pie_filter_sum(const int8_t *p, int32_t len)
-{
-    static const int8_t one = 1;
-    int32_t sum = 0;
-    int32_t idx = 0;
-
-    if (len >= 32) {
-        const int32_t c32 = (len >> 5) - 1;
-        asm volatile (
-            "mv x31, %[one]                 \n\t"
-            "esp.vldbc.8.ip  q1, x31, 0     \n\t"
-            "mv x30, %[inp]                 \n\t"
-            "esp.zero.xacc                  \n\t"
-            "esp.vld.128.ip  q0, x30, 16    \n\t"
-            "esp.vld.128.ip  q2, x30, 16    \n\t"
-            "beqz %[c32], 2f                \n\t"
-            "mv   s7, %[c32]                \n\t"
-            "1:                             \n\t"
-            "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
-            "esp.vmulas.s8.xacc.ld.ip  q2, x30, 16, q2, q1   \n\t"
-            "addi s7, s7, -1                \n\t"
-            "bnez s7, 1b                    \n\t"
-            "2:                             \n\t"
-            "esp.vmulas.s8.xacc  q0, q1     \n\t"
-            "esp.vmulas.s8.xacc  q2, q1     \n\t"
-            "esp.movx.r.xacc.l  x29         \n\t"
-            "mv %[out], x29                 \n\t"
-            : [out] "=r" (sum)
-            : [inp] "r" (p), [one] "r" (&one), [c32] "r" (c32)
-            : "x29", "x30", "x31", "s7"
-        );
-        idx = len & ~31;
-    }
-    for (; idx < len; idx++) {
-        sum += p[idx];
-    }
-    return sum;
-}
 
 void esp_nn_fully_connected_s8_riscv_pie(const int8_t *input_data,
                                         const int32_t input_offset,
@@ -204,7 +163,7 @@ void esp_nn_fully_connected_s8_riscv_pie(const int8_t *input_data,
         int32_t corr = global_corr;
         if (input_offset != 0) {
             const int8_t *f_ptr = filter_data + (int32_t)row_len * ch;
-            corr += fc_pie_filter_sum(f_ptr, row_len) * input_offset;
+            corr += esp_nn_filter_sum_s8_riscv_pie(f_ptr, row_len) * input_offset;
         }
         if (bias) {
             corr += bias[ch];
@@ -280,7 +239,7 @@ void esp_nn_fully_connected_per_ch_s8_riscv_pie(const int8_t *input_data,
         int32_t corr = global_corr;
         if (input_offset != 0) {
             const int8_t *f_ptr = filter_data + (int32_t)row_len * ch;
-            corr += fc_pie_filter_sum(f_ptr, row_len) * input_offset;
+            corr += esp_nn_filter_sum_s8_riscv_pie(f_ptr, row_len) * input_offset;
         }
         if (bias) {
             corr += bias[ch];

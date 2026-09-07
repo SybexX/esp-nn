@@ -37,13 +37,17 @@ void esp_nn_depthwise_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    // run for 19 iterations
-    for (int itr = 0; itr < 27; itr++) {
+    // The 27-32 block carries the large channel counts that regressed the P4
+    // PIE path: its offset/bias workspace used to stop at 256 channels and
+    // silently produced incorrect results above that limit.
+    for (int itr = 0; itr < 33; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
          * (top/left) padding is passed in and trailing padding is implicit. */
         uint16_t force_out_wd = 0, force_out_ht = 0;
+        scratch_buf = NULL;
+        esp_nn_set_depthwise_conv_scratch_buf(NULL);
 
         /* prepare data */
         switch (itr) {
@@ -229,6 +233,18 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
+        case 27: // Moonshine depthwise shape: 384 channels, padded
+            input_wd = 9;
+            input_ht = 5;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 384;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
         case 23: // as 19, but with an ALIGNED filter: exercises the int8 (K,1) path
             input_wd = 1;
             input_ht = 384;
@@ -305,6 +321,18 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
+        case 28: // Moonshine depthwise shape: 640 channels, padded
+            input_wd = 5;
+            input_ht = 3;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 640;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
         case 22: // same, larger 8-mod-16 count and stride 2
             input_wd = 1;
             input_ht = 192;
@@ -315,6 +343,59 @@ void esp_nn_depthwise_conv_s8_test()
             pad_wd = 0;
             pad_ht = 1;
             stride_wd = 1;
+            stride_ht = 2;
+            break;
+        case 29: // 384 channels, stride two and a deliberately unaligned input
+            input_wd = 9;
+            input_ht = 5;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 384;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 30: // 640 channels with no bias
+            input_wd = 5;
+            input_ht = 3;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 640;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            no_bias = true;
+            break;
+        case 31: // 264 channels: above the old 256 workspace limit AND
+                 // channels % 16 == 8. Every other large-channel case is a
+                 // multiple of 16; an 8-mod-16 count is what exposed silent
+                 // corruption in the S3 depthwise tiled path, so the PIE
+                 // paths get the same guard case.
+            input_wd = 9;
+            input_ht = 5;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 264;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 32: // 520 channels, 8 mod 16, stride 2
+            input_wd = 9;
+            input_ht = 5;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 520;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
             stride_ht = 2;
             break;
         default:
@@ -358,8 +439,8 @@ void esp_nn_depthwise_conv_s8_test()
         int out_size = out_wd * out_ht * channels * ch_mult;
         int filter_size = filter_wd * filter_ht * channels * ch_mult + 4;
         int bias_size = channels * ch_mult + 1;
-        int32_t out_shift[channels * ch_mult];
-        int32_t out_mult[channels * ch_mult];
+        int32_t *out_shift = ESP_NN_TEST_ALLOC(channels * ch_mult * sizeof(int32_t));
+        int32_t *out_mult = ESP_NN_TEST_ALLOC(channels * ch_mult * sizeof(int32_t));
 
         int8_t *input_orig = ESP_NN_TEST_ALLOC(in_size + 16);
         int8_t *out_c_orig = ESP_NN_TEST_ALLOC(out_size + 16);
@@ -368,12 +449,16 @@ void esp_nn_depthwise_conv_s8_test()
         bias = ESP_NN_TEST_ALLOC(bias_size * 4);
 
         if (bias == NULL || input_orig == NULL || filter_data == NULL ||
-                out_c_orig == NULL || out_opt_orig == NULL) {
+                out_c_orig == NULL || out_opt_orig == NULL ||
+                out_shift == NULL || out_mult == NULL) {
             printf(ANSI_COLOR_RED"[%d] allocations failed\n"ANSI_COLOR_RESET, itr);
             goto dc_s8_cleanup;
         }
 
         input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
+        if (itr == 21) {
+            input += 1;
+        }
         out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
         out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
 
@@ -407,13 +492,20 @@ void esp_nn_depthwise_conv_s8_test()
         data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};
         data_dims_t output_dims = {.width = out_wd, .height = out_ht, .channels = channels * ch_mult, 1};
         data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, 0, 0};
-        dw_conv_params_t conv_params = {.in_offset = input_offset, .out_offset = out_offset, .ch_mult = ch_mult,
+        const int32_t test_input_offset = itr == 21 ? 0 : input_offset;
+        dw_conv_params_t conv_params = {.in_offset = test_input_offset, .out_offset = out_offset, .ch_mult = ch_mult,
                                         .stride = {stride_wd, stride_ht}, .padding = {pad_wd, pad_ht},
                                         .dilation = {0, 0}, .activation = {activation_min, activation_max}};
         quant_data_t quant_data = {.shift = out_shift, .mult = out_mult};
 
         int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(&input_dims, &filter_dims,
                                                                       &output_dims, &conv_params);
+        if (ch_mult == 1 && channels >= 8 &&
+                scratch_buf_size < channels * (int) sizeof(int32_t)) {
+            printf(ANSI_COLOR_RED"[%d] scratch buffer too small: %d, need %d\n"ANSI_COLOR_RESET,
+                   itr, scratch_buf_size, channels * (int) sizeof(int32_t));
+            goto dc_s8_cleanup;
+        }
         int8_t *scratch_guard = NULL;
         if (scratch_buf_size > 0) {
             scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 16 + SCRATCH_GUARD_SZ);
@@ -505,9 +597,17 @@ void esp_nn_depthwise_conv_s8_test()
         if (bias) {
             free(bias);
         }
+        if (out_shift) {
+            free(out_shift);
+        }
+        if (out_mult) {
+            free(out_mult);
+        }
         if (scratch_buf) {
             free(scratch_buf);
+            scratch_buf = NULL;
         }
+        esp_nn_set_depthwise_conv_scratch_buf(NULL);
     }
 }
 
@@ -534,7 +634,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 22; itr++) {
+    for (int itr = 0; itr < 27; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -778,6 +878,70 @@ void esp_nn_conv_s8_test()
             force_out_wd = 8; /* SAME: same size as input */
             force_out_ht = 8;
             break;
+        case 22: // Small-spatial pointwise workload: 3x5x640 -> 240
+            in_wd = 5;
+            in_ht = 3;
+            in_channels = 640;
+            out_channels = 240;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 23: // Small-spatial pointwise workload: 3x5x240 -> 640
+            in_wd = 5;
+            in_ht = 3;
+            in_channels = 240;
+            out_channels = 640;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 24: // Small-spatial pointwise workload: 3x5x160 -> 640
+            in_wd = 5;
+            in_ht = 3;
+            in_channels = 160;
+            out_channels = 640;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 26: // as the small-spatial cases but in_channels % 16 == 8: each
+                 // filter row (in_channels bytes) starts 8-byte aligned on
+                 // alternate rows - the case the aligned/unaligned dot choice
+                 // has to get right.
+            in_wd = 5;
+            in_ht = 3;
+            in_channels = 264;
+            out_channels = 640;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 25: // Large filter with zero input offset and no bias
+            in_wd = 5;
+            in_ht = 3;
+            in_channels = 640;
+            out_channels = 240;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            input_offset = 0;
+            break;
         case 19: // asymmetric "SAME" padding as TFLite generates it (3x3, stride 2)
             in_wd = 7;
             in_ht = 8;
@@ -966,6 +1130,7 @@ void esp_nn_conv_s8_test()
                                     .stride = {stride_wd, stride_ht}, .padding = {pad_wd, pad_ht},
                                     .dilation = {0, 0}, .activation = {activation_min, activation_max}};
         quant_data_t quant_data = {.shift = out_shift, .mult = out_mult};
+        const int32_t *test_bias = itr == 25 ? NULL : bias;
 
         int scratch_buf_size = esp_nn_get_conv_scratch_size(&input_dims, &filter_dims,
                                                             &output_dims, &conv_params);
@@ -985,14 +1150,14 @@ void esp_nn_conv_s8_test()
 
         /* C function */
         esp_nn_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data,
-                            bias, &output_dims, out_data_c, &conv_params, &quant_data);
+                            test_bias, &output_dims, out_data_c, &conv_params, &quant_data);
 
         total_c = profile_c_end();
         profile_opt_start();
 
         /* Optimized function */
         esp_nn_conv_s8(&input_dims, input, &filter_dims, filter_data,
-                       bias, &output_dims, out_data_opt, &conv_params, &quant_data);
+                       test_bias, &output_dims, out_data_opt, &conv_params, &quant_data);
 
         /* disable profiler */
         total_opt = profile_opt_end();

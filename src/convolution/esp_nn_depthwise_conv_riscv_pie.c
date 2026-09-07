@@ -22,17 +22,22 @@ void esp_nn_depthwise_conv_s8_opt(const data_dims_t *input_dims,
                                    const dw_conv_params_t *conv_params,
                                    const quant_data_t *quant_data);
 
+static int32_t *scratch_buffer = NULL;
+
 int esp_nn_get_depthwise_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
                                                     const data_dims_t *filter_dims,
                                                     const data_dims_t *output_dims,
                                                     const dw_conv_params_t *conv_params)
 {
+    if (conv_params->ch_mult == 1 && input_dims->channels >= 8) {
+        return input_dims->channels * sizeof(int32_t);
+    }
     return 0;
 }
 
 void esp_nn_set_depthwise_conv_scratch_buf_riscv_pie(const void *buf)
 {
-    (void) buf;
+    scratch_buffer = (int32_t *) buf;
 }
 
 /* PIE-optimized ch_mult=1, channels>=16 path using QACC per-lane MAC.
@@ -91,22 +96,18 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
     /* Pre-compute combined offset: filter_sum * input_offset + bias per channel.
      * This fuses two additions per channel into one pre-computed value.
      * Constant for the entire layer - computed once. */
-    int32_t combined_offset_buf[256]; /* support up to 256 channels on stack */
-    int32_t *combined_offset = NULL;
-    if (channels <= 256) {
-        combined_offset = combined_offset_buf;
-        for (int ch = 0; ch < channels; ch++) {
-            int32_t s = 0;
-            if (input_offset != 0) {
-                for (int fy = 0; fy < filter_ht; fy++) {
-                    for (int fx = 0; fx < filter_wd; fx++) {
-                        s += filter_data[(fy * filter_wd + fx) * channels + ch];
-                    }
+    int32_t *combined_offset = scratch_buffer;
+    for (int ch = 0; ch < channels; ch++) {
+        int32_t s = 0;
+        if (input_offset != 0) {
+            for (int fy = 0; fy < filter_ht; fy++) {
+                for (int fx = 0; fx < filter_wd; fx++) {
+                    s += filter_data[(fy * filter_wd + fx) * channels + ch];
                 }
-                s *= input_offset;
             }
-            combined_offset[ch] = s + (bias ? bias[ch] : 0);
+            s *= input_offset;
         }
+        combined_offset[ch] = s + (bias ? bias[ch] : 0);
     }
 
     int out_idx = 0;
@@ -191,24 +192,22 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                 QACC_EXTRACT(result);
 
                 /* Add fused offset (filter_sum * input_offset + bias) + requantize */
-                if (combined_offset) {
-                    if (is_full_window) {
-                        for (int k = 0; k < block_ch; k++) {
-                            result[k] += combined_offset[ch_idx + k];
-                        }
-                    } else {
-                        for (int k = 0; k < block_ch; k++) {
-                            int32_t fsum = 0;
-                            if (input_offset != 0) {
-                                for (int fy = filter_y_start; fy < filter_y_end; fy++) {
-                                    for (int fx = filter_x_start; fx < filter_x_end; fx++) {
-                                        fsum += filter_data[(fy * filter_wd + fx) * channels + ch_idx + k];
-                                    }
+                if (is_full_window) {
+                    for (int k = 0; k < block_ch; k++) {
+                        result[k] += combined_offset[ch_idx + k];
+                    }
+                } else {
+                    for (int k = 0; k < block_ch; k++) {
+                        int32_t fsum = 0;
+                        if (input_offset != 0) {
+                            for (int fy = filter_y_start; fy < filter_y_end; fy++) {
+                                for (int fx = filter_x_start; fx < filter_x_end; fx++) {
+                                    fsum += filter_data[(fy * filter_wd + fx) * channels + ch_idx + k];
                                 }
-                                fsum *= input_offset;
                             }
-                            result[k] += fsum + (bias ? bias[ch_idx + k] : 0);
+                            fsum *= input_offset;
                         }
+                        result[k] += fsum + (bias ? bias[ch_idx + k] : 0);
                     }
                 }
 
@@ -281,6 +280,12 @@ void esp_nn_depthwise_conv_s8_riscv_pie(const data_dims_t *input_dims,
     const uint16_t channels = input_dims->channels;
 
     if (ch_mult == 1 && channels >= 8) {
+        if (scratch_buffer == NULL) {
+            esp_nn_depthwise_conv_s8_opt(input_dims, input_data, filter_dims,
+                                          filter_data, bias, output_dims,
+                                          out_data, conv_params, quant_data);
+            return;
+        }
         depthwise_conv_s8_ch1_pie(input_dims, input_data, filter_dims, filter_data,
                                    bias, output_dims, out_data, conv_params, quant_data);
         return;
